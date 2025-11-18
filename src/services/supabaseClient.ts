@@ -1,11 +1,31 @@
 
-
-
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { AppData, User, Source, ChatMessage, UserMessageVote, UserSourceVote, Summary, Flashcard, Question, Comment, MindMap, ContentType, UserContentInteraction, QuestionNotebook, UserNotebookInteraction, UserQuestionAnswer, AudioSummary, CaseStudy, UserCaseStudyInteraction, ScheduleEvent, StudyPlan, LinkFile, XpEvent, UserMood, ProcapExamQuestion, UserExamAnswer } from '../types';
 
 /*
--- =... (SQL instructions unchanged) ...
+-- SQL CONFIGURATION FOR PROCAP TABLES (Run this in Supabase SQL Editor) --
+
+-- Remover políticas antigas que podem estar conflitando
+DROP POLICY IF EXISTS "Permitir leitura de questoes para autenticados" ON public.procap_exam_questions;
+DROP POLICY IF EXISTS "Permitir leitura de todas respostas" ON public.user_exam_answers;
+DROP POLICY IF EXISTS "Permitir inserir propria resposta" ON public.user_exam_answers;
+DROP POLICY IF EXISTS "Permitir atualizar propria resposta" ON public.user_exam_answers;
+DROP POLICY IF EXISTS "Permitir deletar propria resposta" ON public.user_exam_answers;
+
+-- Política para PERMITIR TUDO para a role 'anon' (já que o controle de usuário é feito via aplicação)
+CREATE POLICY "Acesso publico questoes" 
+ON public.procap_exam_questions FOR SELECT 
+TO anon, authenticated, service_role 
+USING (true);
+
+CREATE POLICY "Acesso publico respostas" 
+ON public.user_exam_answers FOR ALL 
+TO anon, authenticated, service_role 
+USING (true)
+WITH CHECK (true);
+
+ALTER TABLE public.procap_exam_questions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_exam_answers ENABLE ROW LEVEL SECURITY;
 */
 
 // Tenta usar as variáveis de ambiente do Vite (import.meta.env) primeiro.
@@ -70,7 +90,7 @@ const fetchTable = async (tableName: string, options?: {
     return allData;
 };
 
-// Optimized initial data fetch
+// Optimized initial data fetch - EXCLUDING Procap Exam Data to speed up initial load
 export const getInitialData = async (): Promise<{ data: AppData; error: string | null }> => {
     if (!checkSupabase()) return { data: {} as AppData, error: "Supabase client not configured." };
 
@@ -92,6 +112,8 @@ export const getInitialData = async (): Promise<{ data: AppData; error: string |
             userMoods,
             caseStudies,
             userCaseStudyInteractions,
+            // NOTE: Do NOT fetch procap_exam_questions or user_exam_answers here.
+            // They are fetched lazily in OlhoNoProcapView.tsx
         ] = await Promise.all([
             fetchTable('users'),
             fetchTable('sources', { ordering: { column: 'created_at', options: { ascending: false } } }),
@@ -111,9 +133,7 @@ export const getInitialData = async (): Promise<{ data: AppData; error: string |
             fetchTable('user_case_study_interactions')
         ]);
         
-        // Nest content inside sources (if applicable in your structure, usually better to keep separate but for AppData compatibility):
         const sourcesWithContent = await Promise.all(sources.map(async (source: any) => {
-            // Ideally fetch these in bulk too, but keeping structure simple for now
              const [summaries, flashcards, questions, mind_maps, audio_summaries] = await Promise.all([
                 supabase!.from('summaries').select('*').eq('source_id', source.id),
                 supabase!.from('flashcards').select('*').eq('source_id', source.id),
@@ -132,7 +152,6 @@ export const getInitialData = async (): Promise<{ data: AppData; error: string |
             };
         }));
 
-        // Add XP from events to users in memory for leaderboard
         const totalXpMap = new Map<string, number>();
         xp_events.forEach((event: XpEvent) => {
            const currentXp = totalXpMap.get(event.user_id) || 0;

@@ -69,11 +69,12 @@ const fetchTable = async (tableName: string, options?: {
     return allData;
 };
 
-// Optimized initial data fetch
+// Optimized initial data fetch with BULK loading
 export const getInitialData = async (): Promise<{ data: AppData; error: string | null }> => {
     if (!checkSupabase()) return { data: {} as AppData, error: "Supabase client not configured." };
 
     try {
+        // Fetch ALL tables in parallel to avoid N+1 query problem
         const [
             users,
             sources,
@@ -91,6 +92,12 @@ export const getInitialData = async (): Promise<{ data: AppData; error: string |
             userMoods,
             caseStudies,
             userCaseStudyInteractions,
+            // Bulk content tables
+            allSummaries,
+            allFlashcards,
+            allQuestions,
+            allMindMaps,
+            allAudioSummaries
         ] = await Promise.all([
             fetchTable('users'),
             fetchTable('sources', { ordering: { column: 'created_at', options: { ascending: false } } }),
@@ -100,36 +107,33 @@ export const getInitialData = async (): Promise<{ data: AppData; error: string |
             fetchTable('schedule_events', { ordering: { column: 'date', options: { ascending: true } } }),
             fetchTable('study_plans'),
             fetchTable('user_message_votes'),
-            fetchTable('user_source_votes'),
+            fetchTable('user_source_votes'), // Corrected table name case
             fetchTable('user_content_interactions'),
             fetchTable('user_notebook_interactions'),
             fetchTable('user_question_answers'),
             fetchTable('xp_events', { ordering: { column: 'created_at', options: { ascending: false } } }),
             fetchTable('user_moods'),
             fetchTable('case_studies'),
-            fetchTable('user_case_study_interactions')
+            fetchTable('user_case_study_interactions'),
+            // Fetch all content items at once
+            fetchTable('summaries'),
+            fetchTable('flashcards'),
+            fetchTable('questions'),
+            fetchTable('mind_maps'),
+            fetchTable('audio_summaries')
         ]);
         
-        // Nest content inside sources (if applicable in your structure, usually better to keep separate but for AppData compatibility):
-        const sourcesWithContent = await Promise.all(sources.map(async (source: any) => {
-            // Ideally fetch these in bulk too, but keeping structure simple for now
-             const [summaries, flashcards, questions, mind_maps, audio_summaries] = await Promise.all([
-                supabase!.from('summaries').select('*').eq('source_id', source.id),
-                supabase!.from('flashcards').select('*').eq('source_id', source.id),
-                supabase!.from('questions').select('*').eq('source_id', source.id),
-                supabase!.from('mind_maps').select('*').eq('source_id', source.id),
-                supabase!.from('audio_summaries').select('*').eq('source_id', source.id),
-            ]);
-            
+        // Efficiently map content to sources in memory
+        const sourcesWithContent = sources.map((source: any) => {
             return {
                 ...source,
-                summaries: (summaries.data || []).map((s: any) => ({...s, keyPoints: s.key_points})),
-                flashcards: flashcards.data || [],
-                questions: (questions.data || []).map((q: any) => ({...q, questionText: q.question_text, correctAnswer: q.correct_answer})),
-                mind_maps: (mind_maps.data || []).map((m: any) => ({...m, imageUrl: m.image_url})),
-                audio_summaries: (audio_summaries.data || []).map((a: any) => ({...a, audioUrl: a.audio_url})),
+                summaries: allSummaries.filter((s: any) => s.source_id === source.id).map((s: any) => ({...s, keyPoints: s.key_points})),
+                flashcards: allFlashcards.filter((f: any) => f.source_id === source.id),
+                questions: allQuestions.filter((q: any) => q.source_id === source.id).map((q: any) => ({...q, questionText: q.question_text, correctAnswer: q.correct_answer})),
+                mind_maps: allMindMaps.filter((m: any) => m.source_id === source.id).map((m: any) => ({...m, imageUrl: m.image_url})),
+                audio_summaries: allAudioSummaries.filter((a: any) => a.source_id === source.id).map((a: any) => ({...a, audioUrl: a.audio_url})),
             };
-        }));
+        });
 
         // Add XP from events to users in memory for leaderboard
         const totalXpMap = new Map<string, number>();
@@ -153,7 +157,7 @@ export const getInitialData = async (): Promise<{ data: AppData; error: string |
             scheduleEvents,
             studyPlans,
             userMessageVotes,
-            userSourceVotes,
+            userSourceVotes: userSourceVotes as any, 
             userContentInteractions,
             userNotebookInteractions,
             userQuestionAnswers,

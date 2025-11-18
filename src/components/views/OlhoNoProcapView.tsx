@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { MainContentProps, ProcapExamQuestion, UserExamAnswer } from '../../types';
 import { getProcapQuestions, getUserExamAnswers, saveUserExamAnswer, deleteUserExamAnswer, getAllUserExamAnswers } from '../../services/supabaseClient';
-import { CheckCircleIcon, XCircleIcon, XMarkIcon } from '../Icons';
+import { XCircleIcon, CheckCircleIcon } from '../Icons';
 
 export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) => {
     const [questions, setQuestions] = useState<ProcapExamQuestion[]>([]);
@@ -12,36 +12,51 @@ export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) =>
     const [expandedQuestion, setExpandedQuestion] = useState<number | null>(null);
 
     useEffect(() => {
-        const fetchData = async () => {
+        let isMounted = true;
+
+        const loadData = async () => {
             setIsLoading(true);
             try {
-                const [qData, uData, allData] = await Promise.all([
+                // 1. Carregamento Crítico: Questões e Respostas do Usuário (Rápido)
+                const [qData, uData] = await Promise.all([
                     getProcapQuestions(),
-                    getUserExamAnswers(currentUser.id),
-                    getAllUserExamAnswers()
+                    getUserExamAnswers(currentUser.id)
                 ]);
-                setQuestions(qData);
-                setUserAnswers(uData);
-                setAllAnswers(allData);
+                
+                if (isMounted) {
+                    setQuestions(qData);
+                    setUserAnswers(uData);
+                    setIsLoading(false); // Libera a UI imediatamente
+                }
+
+                // 2. Carregamento Secundário: Estatísticas da Comunidade (Lento)
+                // Executa apenas após a UI estar pronta
+                const allData = await getAllUserExamAnswers();
+                if (isMounted) {
+                    setAllAnswers(allData);
+                }
             } catch (error) {
                 console.error("Error loading exam data:", error);
-            } finally {
-                setIsLoading(false);
+                if (isMounted) setIsLoading(false);
             }
         };
-        fetchData();
+
+        loadData();
+
+        return () => { isMounted = false; };
     }, [currentUser.id]);
 
     const handleSelectAnswer = async (qNum: number, answer: string) => {
         // Optimistic update
         const existingAnswer = userAnswers.find(a => a.question_number === qNum);
+        
+        // Se clicar na mesma resposta, desmarca
         if (existingAnswer?.selected_answer === answer) {
-            // Deselect
             const newAnswers = userAnswers.filter(a => a.question_number !== qNum);
             setUserAnswers(newAnswers);
             await deleteUserExamAnswer(currentUser.id, qNum);
         } else {
-            // Select/Change
+            // Se clicar em outra, atualiza
             const newAnswer: UserExamAnswer = {
                 id: `temp-${Date.now()}`,
                 user_id: currentUser.id,
@@ -56,16 +71,21 @@ export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) =>
             });
             
             // Auto-advance logic
-            const nextQuestionElement = document.getElementById(`q-card-${qNum + 1}`);
-            if (nextQuestionElement) {
-                nextQuestionElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
+            setTimeout(() => {
+                const nextQuestionElement = document.getElementById(`q-card-${qNum + 1}`);
+                if (nextQuestionElement) {
+                    nextQuestionElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }, 300);
 
-            await saveUserExamAnswer(currentUser.id, qNum, answer);
+            const result = await saveUserExamAnswer(currentUser.id, qNum, answer);
+            if (!result) {
+                // Revert optimistic update on failure
+                alert("Erro ao salvar resposta. Verifique sua conexão.");
+                setUserAnswers(prev => prev.filter(a => a.id !== newAnswer.id));
+                if (existingAnswer) setUserAnswers(prev => [...prev, existingAnswer]);
+            }
         }
-        
-        // Refresh global stats in background
-        getAllUserExamAnswers().then(setAllAnswers);
     };
 
     const calculateMajority = (qNum: number) => {
@@ -108,7 +128,7 @@ export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) =>
 
         return {
             ai: { correct: aiCorrect, total: answeredCount },
-            official: { correct: officialCorrect, total: totalOfficial > 0 ? questions.filter(q=>q.gabarito_preliminar && userAnswers.some(a=>a.question_number===q.question_number)).length : 0 }, // Only count official comparisons if user answered AND official key exists
+            official: { correct: officialCorrect, total: totalOfficial > 0 ? questions.filter(q=>q.gabarito_preliminar && userAnswers.some(a=>a.question_number===q.question_number)).length : 0 }, 
             majority: { agreement: majorityAgreement, total: answeredCount }
         };
     }, [userAnswers, questions, allAnswers]);
@@ -119,7 +139,6 @@ export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) =>
             const official = q.gabarito_preliminar?.toLowerCase();
             const majority = calculateMajority(q.question_number)?.answer;
             
-            // Check for disagreements
             const aiVsOfficial = official && ai !== official;
             const officialVsMajority = official && majority && official !== majority;
             const aiVsMajority = majority && ai !== majority;
@@ -129,11 +148,17 @@ export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) =>
     }, [questions, allAnswers]);
 
     if (isLoading) {
-        return <div className="flex items-center justify-center h-full text-xl font-bold text-gray-500">Carregando Prova...</div>;
+        return (
+            <div className="flex flex-col items-center justify-center h-64 text-gray-500 gap-2">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-light"></div>
+                <p>Carregando Prova...</p>
+            </div>
+        );
     }
 
     return (
-        <div className="space-y-6 pb-20">
+        <div className="space-y-6 pb-20 animate-fade-in-up">
+            {/* Stats Dashboard */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="bg-card-light dark:bg-card-dark p-4 rounded-lg border border-border-light dark:border-border-dark shadow-sm flex flex-col items-center justify-center">
                     <h3 className="text-sm font-semibold text-gray-500 mb-1">Coincidência com IA</h3>
@@ -152,6 +177,7 @@ export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) =>
                 </div>
             </div>
 
+            {/* Divergences Alert */}
             {divergences.length > 0 && (
                 <div className="bg-red-50 dark:bg-red-900/20 p-4 rounded-lg border border-red-200 dark:border-red-800">
                     <h3 className="font-bold text-red-700 dark:text-red-400 mb-2 flex items-center gap-2">
@@ -171,81 +197,79 @@ export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) =>
                 </div>
             )}
 
+            {/* Questions Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {Array.from({ length: 40 }, (_, i) => i + 1).map(num => {
                     const questionData = questions.find(q => q.question_number === num);
                     const userAnswer = userAnswers.find(u => u.question_number === num)?.selected_answer;
                     const majority = calculateMajority(num);
                     
-                    // Parse options if they exist as string
                     let optionsMap: any = null;
                     if (questionData?.options) {
                          try {
                              optionsMap = typeof questionData.options === 'string' ? JSON.parse(questionData.options) : questionData.options;
                          } catch (e) {
-                             console.error("Error parsing options", e);
+                             // Fallback if JSON parse fails, potentially handle raw string
+                             optionsMap = null;
                          }
                     }
 
                     return (
-                        <div id={`q-card-${num}`} key={num} className={`relative bg-card-light dark:bg-card-dark rounded-lg border shadow-sm flex flex-col transition-all ${userAnswer ? 'border-primary-light dark:border-primary-dark' : 'border-border-light dark:border-border-dark'}`}>
+                        <div id={`q-card-${num}`} key={num} className={`relative bg-card-light dark:bg-card-dark rounded-lg border shadow-sm flex flex-col transition-all duration-200 ${userAnswer ? 'border-primary-light dark:border-primary-dark ring-1 ring-primary-light dark:ring-primary-dark' : 'border-border-light dark:border-border-dark'}`}>
                             <div className="p-3 border-b border-border-light dark:border-border-dark flex justify-between items-center bg-gray-50 dark:bg-gray-800/50 rounded-t-lg">
                                 <span className="font-bold text-lg">Questão {num}</span>
-                                <div className="flex gap-1 text-xs">
-                                    {questionData?.ai_correct_answer && <span title="Gabarito IA" className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">AI: {questionData.ai_correct_answer.toUpperCase()}</span>}
-                                    {questionData?.gabarito_preliminar && <span title="Gabarito Preliminar" className="px-1.5 py-0.5 rounded bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Off: {questionData.gabarito_preliminar.toUpperCase()}</span>}
-                                    {majority && majority.count > 1 && <span title="Maioria" className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">{majority.percentage.toFixed(0)}% {majority.answer.toUpperCase()}</span>}
+                                <div className="flex gap-1 text-xs flex-wrap justify-end">
+                                    {questionData?.ai_correct_answer && <span title="Gabarito IA" className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 font-mono">AI:{questionData.ai_correct_answer.toUpperCase()}</span>}
+                                    {questionData?.gabarito_preliminar && <span title="Gabarito Preliminar" className="px-1.5 py-0.5 rounded bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 font-mono">OF:{questionData.gabarito_preliminar.toUpperCase()}</span>}
+                                    {majority && majority.count > 1 && <span title="Maioria" className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 font-mono">{majority.percentage.toFixed(0)}%{majority.answer.toUpperCase()}</span>}
                                 </div>
                             </div>
                             
                             <div className="p-4 flex-grow flex flex-col justify-between gap-4">
                                 {questionData?.question_text ? (
-                                    <div>
-                                        <p className={`text-sm ${expandedQuestion === num ? '' : 'line-clamp-3'}`} onClick={() => setExpandedQuestion(expandedQuestion === num ? null : num)}>
+                                    <div onClick={() => setExpandedQuestion(expandedQuestion === num ? null : num)} className="cursor-pointer group">
+                                        <p className={`text-sm text-foreground-light dark:text-foreground-dark transition-all ${expandedQuestion === num ? '' : 'line-clamp-4 group-hover:text-primary-light dark:group-hover:text-primary-dark'}`}>
                                             {questionData.question_text}
                                         </p>
                                         {optionsMap && expandedQuestion === num && (
-                                            <div className="mt-2 text-xs space-y-1 text-gray-600 dark:text-gray-300 border-t pt-2 border-gray-200 dark:border-gray-700">
+                                            <div className="mt-3 text-xs space-y-2 text-gray-600 dark:text-gray-300 border-t pt-2 border-gray-200 dark:border-gray-700 animate-fade-in-up">
                                                 {Object.entries(optionsMap).map(([key, val]: [string, any]) => (
-                                                    <div key={key} className={userAnswer === key ? 'font-bold text-primary-light' : ''}>
-                                                        <span className="uppercase font-bold">{key})</span> {val}
+                                                    <div key={key} className={`p-1 rounded ${userAnswer === key ? 'bg-primary-light/10 text-primary-light font-bold' : ''}`}>
+                                                        <span className="uppercase font-bold mr-1">{key})</span> {val}
                                                     </div>
                                                 ))}
                                             </div>
                                         )}
+                                        {expandedQuestion !== num && <p className="text-xs text-center text-gray-400 mt-1">clique para expandir</p>}
                                     </div>
                                 ) : (
-                                    <div className="text-sm text-gray-400 italic text-center py-4">Texto da questão não disponível</div>
+                                    <div className="text-sm text-gray-400 italic text-center py-8 bg-gray-50 dark:bg-gray-800/30 rounded">
+                                        Texto indisponível
+                                    </div>
                                 )}
 
-                                <div className="flex justify-between items-center mt-auto">
+                                <div className="flex justify-between items-center mt-auto pt-2">
                                     {['a', 'b', 'c', 'd', 'e'].map(opt => {
                                         const isSelected = userAnswer === opt;
                                         const isAi = questionData?.ai_correct_answer?.toLowerCase() === opt;
                                         const isOfficial = questionData?.gabarito_preliminar?.toLowerCase() === opt;
                                         
-                                        // Conflict Logic colors
-                                        let ringColor = 'ring-gray-200 dark:ring-gray-700';
-                                        if (isOfficial) ringColor = 'ring-green-500 ring-2';
-                                        else if (isAi && !questionData?.gabarito_preliminar) ringColor = 'ring-blue-400 ring-2';
+                                        let ringColor = '';
+                                        if (isOfficial) ringColor = 'ring-2 ring-green-500';
+                                        else if (isAi && !questionData?.gabarito_preliminar) ringColor = 'ring-2 ring-blue-400';
 
                                         return (
                                             <button
                                                 key={opt}
                                                 onClick={() => handleSelectAnswer(num, opt)}
-                                                className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm transition-all shadow-sm ring-offset-1 dark:ring-offset-gray-800 ${ringColor}
+                                                className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm transition-all shadow-sm ${ringColor}
                                                     ${isSelected 
                                                         ? 'bg-primary-light dark:bg-primary-dark text-white scale-110' 
-                                                        : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'
+                                                        : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300'
                                                     }
                                                 `}
                                             >
                                                 {opt.toUpperCase()}
-                                                {/* Small indicator dots for feedback without selection */}
-                                                <div className="absolute -bottom-1 flex gap-0.5">
-                                                    {/* If selected matched official */}
-                                                    {isSelected && isOfficial && <span className="block w-1 h-1 rounded-full bg-white"></span>}
-                                                </div>
                                             </button>
                                         )
                                     })}
