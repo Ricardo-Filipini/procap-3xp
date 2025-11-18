@@ -671,6 +671,9 @@ export const NotebookDetailView: React.FC<{
     
     // Ref to ensure initial focus is applied only once
     const hasAppliedInitialFocus = useRef(false);
+    
+    // NEW: Ref to preserve visual index across sorts
+    const preservedIndexRef = useRef<number | null>(null);
 
     useEffect(() => {
         const answersForNotebook = appData.userQuestionAnswers.filter(
@@ -843,26 +846,8 @@ export const NotebookDetailView: React.FC<{
         return sortedQuestions.findIndex(q => q.id === activeQuestionId);
     }, [activeQuestionId, sortedQuestions]);
     
-    const preservedIndexRef = useRef<number | null>(null);
-
-    // This effect ensures the active question is valid after a sort/filter change.
-    useEffect(() => {
-        if (typeof preservedIndexRef.current === 'number') {
-            const newIndex = Math.max(0, Math.min(preservedIndexRef.current, sortedQuestions.length - 1));
-            const newQuestion = sortedQuestions[newIndex] || sortedQuestions[0] || null;
-            if (newQuestion) {
-                setActiveQuestionId(newQuestion.id);
-            } else {
-                setActiveQuestionId(null);
-            }
-        } else if (!activeQuestionId && sortedQuestions.length > 0 && hasAppliedInitialFocus.current) {
-             // Only default to first if we've already handled initial focus attempt
-             // and somehow activeQuestionId became null (e.g. via filter clearing everything then re-adding)
-        }
-        preservedIndexRef.current = null;
-    }, [sortedQuestions]);
-
     const handleSortChange = (newSort: typeof questionSortOrder) => {
+        // Preserve current index position
         preservedIndexRef.current = currentQuestionIndex > -1 ? currentQuestionIndex : 0;
         setQuestionSortOrder(newSort);
         if (newSort === 'random') {
@@ -871,7 +856,8 @@ export const NotebookDetailView: React.FC<{
     };
 
     const handleFilterChange = () => {
-        preservedIndexRef.current = 0; // Reset index when filters change
+        // Reset to start when filtering
+        preservedIndexRef.current = 0;
     };
     
     const handleDifficultyFilterChange = (newDifficulty: typeof difficultyFilter) => {
@@ -971,9 +957,22 @@ export const NotebookDetailView: React.FC<{
             return;
         }
 
+        // 1. Priority: Preserved Index (Sort/Filter action just happened)
+        if (typeof preservedIndexRef.current === 'number') {
+             const targetIndex = preservedIndexRef.current;
+             // Boundary check
+             const safeIndex = Math.max(0, Math.min(targetIndex, sortedQuestions.length - 1));
+             const newQuestion = sortedQuestions[safeIndex];
+             if (newQuestion) {
+                 setActiveQuestionId(newQuestion.id);
+             }
+             preservedIndexRef.current = null; // Reset
+             return;
+        }
+
         let nextActiveId = activeQuestionId;
 
-        // 1. Initial Restore Logic (Run Once)
+        // 2. Initial Restore Logic (Run Once)
         if (questionIdToFocus && !hasAppliedInitialFocus.current) {
             const targetExists = sortedQuestions.some(q => q.id === questionIdToFocus);
             if (targetExists) {
@@ -982,7 +981,7 @@ export const NotebookDetailView: React.FC<{
             }
         }
 
-        // 2. Validation Logic
+        // 3. Validation Logic
         const isValid = nextActiveId && sortedQuestions.some(q => q.id === nextActiveId);
         if (!isValid) {
             // Fallback to first

@@ -669,8 +669,11 @@ export const NotebookDetailView: React.FC<{
     const [userAnswers, setUserAnswers] = useState<Map<string, UserQuestionAnswer>>(new Map());
     const notebookId = notebook === 'all' ? 'all_questions' : notebook.id;
     
-    // Ref for one-time focus application to fix navigation stuck issue
-    const initialFocusApplied = useRef(false);
+    // Ref to ensure initial focus is applied only once
+    const hasAppliedInitialFocus = useRef(false);
+    
+    // NEW: Ref to preserve visual index across sorts
+    const preservedIndexRef = useRef<number | null>(null);
 
     useEffect(() => {
         const answersForNotebook = appData.userQuestionAnswers.filter(
@@ -842,31 +845,42 @@ export const NotebookDetailView: React.FC<{
         if (!activeQuestionId) return -1;
         return sortedQuestions.findIndex(q => q.id === activeQuestionId);
     }, [activeQuestionId, sortedQuestions]);
-
+    
     const handleSortChange = (newSort: typeof questionSortOrder) => {
+        // Preserve current index position
+        preservedIndexRef.current = currentQuestionIndex > -1 ? currentQuestionIndex : 0;
         setQuestionSortOrder(newSort);
         if (newSort === 'random') {
             setShuffleTrigger(c => c + 1);
         }
     };
 
+    const handleFilterChange = () => {
+        // Reset to start when filtering
+        preservedIndexRef.current = 0;
+    };
+    
     const handleDifficultyFilterChange = (newDifficulty: typeof difficultyFilter) => {
+        handleFilterChange();
         setDifficultyFilter(prev => (prev === newDifficulty ? 'all' : newDifficulty));
     };
 
     const handleShowWrongOnlyChange = () => {
+        handleFilterChange();
         const isTurningOn = !showWrongOnly;
         setShowWrongOnly(isTurningOn);
         if (isTurningOn) setShowUnansweredInAnyNotebook(false);
     };
 
     const handleShowUnansweredChange = () => {
+        handleFilterChange();
         const isTurningOn = !showUnansweredInAnyNotebook;
         setShowUnansweredInAnyNotebook(isTurningOn);
         if (isTurningOn) setShowWrongOnly(false);
     };
     
     const handleSourceFilterChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+        handleFilterChange();
         setSourceFilter(e.target.value);
     };
     
@@ -883,7 +897,7 @@ export const NotebookDetailView: React.FC<{
         displayedQuestionRef.current = currentQuestion;
     }
     const questionToRender = isCompleted ? (displayedQuestionRef.current ?? currentQuestion) : currentQuestion;
-    
+
     const savedAnswer = questionToRender ? userAnswers.get(questionToRender.id) : undefined;
 
     const prevQuestionIdRef = useRef<string | null>(null);
@@ -936,36 +950,50 @@ export const NotebookDetailView: React.FC<{
         setShuffledOptions(options);
     };
 
-    // Effect 1: Initial Focus Logic (Run Once when list is populated)
-    useEffect(() => {
-        if (sortedQuestions.length > 0 && !initialFocusApplied.current) {
-            let targetId = sortedQuestions[0].id;
-            if (questionIdToFocus) {
-                const found = sortedQuestions.find(q => q.id === questionIdToFocus);
-                if (found) targetId = found.id;
-            }
-            setActiveQuestionId(targetId);
-            initialFocusApplied.current = true;
-        }
-    }, [sortedQuestions, questionIdToFocus]);
-
-    // Effect 2: Validation on list change (e.g. filter)
+    // FIX: Ensure initial focus is applied only once using ref, preventing navigation lock.
     useEffect(() => {
         if (sortedQuestions.length === 0) {
-             if (activeQuestionId !== null) setActiveQuestionId(null);
+            if (activeQuestionId !== null) setActiveQuestionId(null);
+            return;
+        }
+
+        // 1. Priority: Preserved Index (Sort/Filter action just happened)
+        if (typeof preservedIndexRef.current === 'number') {
+             const targetIndex = preservedIndexRef.current;
+             // Boundary check
+             const safeIndex = Math.max(0, Math.min(targetIndex, sortedQuestions.length - 1));
+             const newQuestion = sortedQuestions[safeIndex];
+             if (newQuestion) {
+                 setActiveQuestionId(newQuestion.id);
+             }
+             preservedIndexRef.current = null; // Reset
              return;
         }
+
+        let nextActiveId = activeQuestionId;
+
+        // 2. Initial Restore Logic (Run Once)
+        if (questionIdToFocus && !hasAppliedInitialFocus.current) {
+            const targetExists = sortedQuestions.some(q => q.id === questionIdToFocus);
+            if (targetExists) {
+                nextActiveId = questionIdToFocus;
+                hasAppliedInitialFocus.current = true;
+            }
+        }
+
+        // 3. Validation Logic
+        const isValid = nextActiveId && sortedQuestions.some(q => q.id === nextActiveId);
+        if (!isValid) {
+            // Fallback to first
+            nextActiveId = sortedQuestions[0].id;
+        }
+
+        if (nextActiveId !== activeQuestionId) {
+            setActiveQuestionId(nextActiveId);
+        }
         
-        // If we have a list, ensure activeQuestionId is valid
-        if (activeQuestionId && !sortedQuestions.find(q => q.id === activeQuestionId)) {
-             // Current active is gone (filtered out). Fallback to first available.
-             setActiveQuestionId(sortedQuestions[0].id);
-        }
-        // If activeQuestionId is null but we have questions (and initial focus was done), select first
-        if (!activeQuestionId && sortedQuestions.length > 0 && initialFocusApplied.current) {
-             setActiveQuestionId(sortedQuestions[0].id);
-        }
-    }, [sortedQuestions, activeQuestionId]);
+    }, [sortedQuestions, questionIdToFocus, activeQuestionId]);
+
 
     useEffect(() => {
         if (activeQuestionId) {
@@ -1200,7 +1228,7 @@ export const NotebookDetailView: React.FC<{
         return (
             <div className="bg-card-light dark:bg-card-dark p-6 rounded-lg shadow-md border border-border-light dark:border-border-dark">
                 <button onClick={onBack} className="mb-4 text-primary-light dark:text-primary-dark hover:underline">&larr; Voltar</button>
-                <p>Carregando dados...</p>
+                <p>Nenhuma questão encontrada para os filtros selecionados.</p>
             </div>
         );
     }
@@ -1223,7 +1251,7 @@ export const NotebookDetailView: React.FC<{
             onVoteComment={(commentId, voteType) => handleCommentAction('vote', {commentId, voteType})} 
             contentTitle={questionToRender?.questionText ? (questionToRender.questionText.substring(0, 50) + '...') : 'Questão'}
         />
-        {/* ... rest of the component ... */}
+
         <NotebookStatsModal
             isOpen={isStatsModalOpen}
             onClose={() => setIsStatsModalOpen(false)}
