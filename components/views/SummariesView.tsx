@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { MainContentProps } from '../../types';
 import { Summary, Comment, ContentType } from '../../types';
@@ -66,7 +67,7 @@ interface SummariesViewProps extends MainContentProps {
 }
 
 export const SummariesView: React.FC<SummariesViewProps> = ({ allItems, appData, setAppData, currentUser, updateUser, navTarget, clearNavTarget, setScreenContext }) => {
-    const [isLoadingContent, setIsLoadingContent] = useState(false);
+    const [isLoadingContent, setIsLoadingContent] = useState(allItems.length === 0 && appData.sources.length > 0);
     const [expanded, setExpanded] = useState<string | null>(null);
     const [commentingOn, setCommentingOn] = useState<Summary | null>(null);
     const contentType: ContentType = 'summary';
@@ -88,6 +89,8 @@ export const SummariesView: React.FC<SummariesViewProps> = ({ allItems, appData,
                 });
                 setIsLoadingContent(false);
             });
+        } else if (allItems.length > 0) {
+            setIsLoadingContent(false);
         }
     }, [appData.sources, setAppData, allItems]);
 
@@ -240,7 +243,7 @@ export const SummariesView: React.FC<SummariesViewProps> = ({ allItems, appData,
             
             <FontSizeControl fontSize={fontSize} setFontSize={setFontSize} className="mb-4" />
             
-            {isLoadingContent ? <div className="text-center p-8">Carregando resumos...</div> : (
+            {isLoadingContent ? <div className="text-center p-8">Carregando dados...</div> : (
                 <div className="space-y-4">
                     {Array.isArray(processedItems) 
                         ? processedItems.map(renderItem)

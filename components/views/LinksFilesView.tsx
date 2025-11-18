@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { MainContentProps, LinkFile, Comment, ContentType } from '../../types';
 import { Modal } from '../Modal';
@@ -357,21 +358,23 @@ export const LinksFilesView: React.FC<LinksFilesViewProps> = (props) => {
                 </button>
             </div>
 
-            <div className="space-y-4">
-                {Array.isArray(processedItems) 
-                    ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">{processedItems.map(renderItem)}</div>
-                    : Object.entries(processedItems as Record<string, LinkFile[]>).map(([groupKey, items]) => (
-                        <details key={groupKey} open className="p-4 rounded-lg">
-                            <summary className="text-2xl font-bold cursor-pointer mb-4">
-                                {sort === 'user' ? (appData.users.find(u => u.id === groupKey)?.pseudonym || 'Desconhecido') : groupKey}
-                            </summary>
-                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                                {items.map(renderItem)}
-                            </div>
-                        </details>
-                    ))
-                }
-            </div>
+            {processedItems.length === 0 ? <div className="text-center p-8">Carregando dados...</div> : (
+                <div className="space-y-4">
+                    {Array.isArray(processedItems) 
+                        ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">{processedItems.map(renderItem)}</div>
+                        : Object.entries(processedItems as Record<string, LinkFile[]>).map(([groupKey, items]) => (
+                            <details key={groupKey} open className="p-4 rounded-lg">
+                                <summary className="text-2xl font-bold cursor-pointer mb-4">
+                                    {sort === 'user' ? (appData.users.find(u => u.id === groupKey)?.pseudonym || 'Desconhecido') : groupKey}
+                                </summary>
+                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                                    {items.map(renderItem)}
+                                </div>
+                            </details>
+                        ))
+                    }
+                </div>
+            )}
         </>
     );
 };

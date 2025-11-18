@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { MainContentProps } from '../../types';
 import { AudioSummary, Comment, ContentType, Source } from '../../types';
@@ -114,7 +115,7 @@ interface AudioSummariesViewProps extends MainContentProps {
 }
 
 export const AudioSummariesView: React.FC<AudioSummariesViewProps> = ({ allItems, appData, setAppData, currentUser, updateUser, navTarget, clearNavTarget }) => {
-    const [isLoadingContent, setIsLoadingContent] = useState(false);
+    const [isLoadingContent, setIsLoadingContent] = useState(allItems.length === 0 && appData.sources.length > 0);
     const [commentingOn, setCommentingOn] = useState<(AudioSummary & { user_id: string, created_at: string}) | null>(null);
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
     const [fontSize, setFontSize] = useState(2);
@@ -136,6 +137,8 @@ export const AudioSummariesView: React.FC<AudioSummariesViewProps> = ({ allItems
                 });
                 setIsLoadingContent(false);
             });
+        } else if (allItems.length > 0) {
+            setIsLoadingContent(false);
         }
     }, [appData.sources, setAppData, allItems]);
     
@@ -286,7 +289,7 @@ export const AudioSummariesView: React.FC<AudioSummariesViewProps> = ({ allItems
                 </div>
             </div>
             
-            {isLoadingContent ? <div className="text-center p-8">Carregando mídias...</div> : (
+            {isLoadingContent ? <div className="text-center p-8">Carregando dados...</div> : (
                 <div className="space-y-4">
                     {Array.isArray(processedItems) 
                         ? processedItems.map(renderItem)

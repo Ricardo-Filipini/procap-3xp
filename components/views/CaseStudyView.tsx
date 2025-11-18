@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { MainContentProps } from '../../types';
 import { CaseStudy, DecisionOption, UserCaseStudyInteraction, Comment, Source, UserContentInteraction } from '../../types';
@@ -341,7 +342,7 @@ export const CaseStudyView: React.FC<MainContentProps> = (props) => {
     const [selectedCaseStudy, setSelectedCaseStudy] = useState<CaseStudy | null>(null);
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
     const [commentingOn, setCommentingOn] = useState<CaseStudy | null>(null);
-    const [isLoading, setIsLoading] = useState(false);
+    const [isLoading, setIsLoading] = useState(appData.caseStudies.length === 0);
     const contentType = 'case_study';
     
     useEffect(() => {
@@ -351,6 +352,8 @@ export const CaseStudyView: React.FC<MainContentProps> = (props) => {
             getCaseStudyData().then(data => {
                 setAppData(prev => ({...prev, ...data}));
             }).finally(() => setIsLoading(false));
+        } else {
+            setIsLoading(false);
         }
     }, [appData.caseStudies.length, setAppData]);
 
@@ -473,7 +476,7 @@ export const CaseStudyView: React.FC<MainContentProps> = (props) => {
     }
     
     if (isLoading) {
-        return <div className="text-center p-8">Carregando estudos de caso...</div>;
+        return <div className="text-center p-8">Carregando dados...</div>;
     }
 
     return (

@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { MainContentProps } from '../../types';
 import { MindMap, Comment, ContentType } from '../../types';
@@ -15,7 +16,7 @@ interface MindMapsViewProps extends MainContentProps {
 }
 
 export const MindMapsView: React.FC<MindMapsViewProps> = ({ allItems, appData, setAppData, currentUser, updateUser, navTarget, clearNavTarget }) => {
-    const [isLoadingContent, setIsLoadingContent] = useState(false);
+    const [isLoadingContent, setIsLoadingContent] = useState(allItems.length === 0 && appData.sources.length > 0);
     const [commentingOn, setCommentingOn] = useState<MindMap | null>(null);
     const [fontSize, setFontSize] = useState(2);
     const contentType: ContentType = 'mind_map';
@@ -36,6 +37,8 @@ export const MindMapsView: React.FC<MindMapsViewProps> = ({ allItems, appData, s
                 });
                 setIsLoadingContent(false);
             });
+        } else if (allItems.length > 0) {
+            setIsLoadingContent(false);
         }
     }, [appData.sources, setAppData, allItems]);
 
@@ -138,7 +141,7 @@ export const MindMapsView: React.FC<MindMapsViewProps> = ({ allItems, appData, s
             <CommentsModal isOpen={!!commentingOn} onClose={() => setCommentingOn(null)} comments={commentingOn?.comments || []} onAddComment={(text) => handleCommentAction('add', {text})} onVoteComment={(commentId, voteType) => handleCommentAction('vote', {commentId, voteType})} contentTitle={commentingOn?.title || ''}/>
             <ContentToolbar {...{ sort, setSort, filter, setFilter, favoritesOnly, setFavoritesOnly, onAiFilter: handleAiFilter, onGenerate: undefined, isFiltering: !!aiFilterIds, onClearFilter: handleClearFilter }} />
             <FontSizeControl fontSize={fontSize} setFontSize={setFontSize} className="mb-4"/>
-             {isLoadingContent ? <div className="text-center p-8">Carregando mapas mentais...</div> : (
+             {isLoadingContent ? <div className="text-center p-8">Carregando dados...</div> : (
                 <div className="space-y-4">
                     {Array.isArray(processedItems) 
                         ? renderItems(processedItems)

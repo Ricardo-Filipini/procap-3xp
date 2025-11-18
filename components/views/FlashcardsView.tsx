@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { MainContentProps } from '../../types';
 import { Flashcard, Comment, ContentType } from '../../types';
@@ -17,7 +18,7 @@ interface FlashcardsViewProps extends MainContentProps {
 }
 
 export const FlashcardsView: React.FC<FlashcardsViewProps> = ({ allItems, appData, setAppData, currentUser, updateUser, navTarget, clearNavTarget }) => {
-    const [isLoadingContent, setIsLoadingContent] = useState(false);
+    const [isLoadingContent, setIsLoadingContent] = useState(allItems.length === 0 && appData.sources.length > 0);
     const [flipped, setFlipped] = useState<string | null>(null);
     const [commentingOn, setCommentingOn] = useState<Flashcard | null>(null);
     const [fontSize, setFontSize] = useState(1);
@@ -40,6 +41,8 @@ export const FlashcardsView: React.FC<FlashcardsViewProps> = ({ allItems, appDat
                 });
                 setIsLoadingContent(false);
             });
+        } else if (allItems.length > 0) {
+            setIsLoadingContent(false);
         }
     }, [appData.sources, setAppData, allItems]);
 
@@ -206,7 +209,7 @@ export const FlashcardsView: React.FC<FlashcardsViewProps> = ({ allItems, appDat
             )}
             
             <FontSizeControl fontSize={fontSize} setFontSize={setFontSize} className="mb-4" />
-            {isLoadingContent ? <div className="text-center p-8">Carregando flashcards...</div> : (
+            {isLoadingContent ? <div className="text-center p-8">Carregando dados...</div> : (
                 <div className="space-y-6">
                     {Array.isArray(itemsToRender) 
                         ? renderItems(itemsToRender)

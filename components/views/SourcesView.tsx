@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { MainContentProps } from '../../types';
 import { Source } from '../../types';
@@ -171,6 +172,7 @@ const AddSourceModal: React.FC<{
                     <div>
                         <h4 className="font-semibold text-sm mb-1">Arquivos Selecionados:</h4>
                         <ul className="text-xs list-disc list-inside bg-background-light dark:bg-background-dark p-2 rounded-md">
+                            {/* FIX: Explicitly type `f` as `File` to allow access to `.name` property. */}
                             {Array.from(files).map((f: File) => <li key={f.name}>{f.name}</li>)}
                         </ul>
                     </div>
@@ -496,6 +498,7 @@ export const SourcesView: React.FC<SourcesViewProps> = ({ appData, setAppData, c
         });
 
         await upsertUserVote('user_source_votes', { user_id: currentUser.id, source_id: sourceId, hot_votes_increment: type === 'hot' ? increment : 0, cold_votes_increment: type === 'cold' ? increment : 0 }, ['user_id', 'source_id']);
+        // FIX: Replaced the generic incrementVoteCount with the specific incrementSourceVote function.
         await incrementSourceVote(sourceId, `${type}_votes`, increment);
         
         const source = appData.sources.find(s => s.id === sourceId);
@@ -503,6 +506,7 @@ export const SourcesView: React.FC<SourcesViewProps> = ({ appData, setAppData, c
             const author = appData.users.find(u => u.id === source.user_id);
             if (author) {
                 const xpChange = (type === 'hot' ? 1 : -1) * increment;
+                // FIX: Defensively cast `author.xp` to a number before performing addition to prevent runtime errors with potentially malformed data.
                 const updatedAuthor = { ...author, xp: Math.max(0, (Number(author.xp) || 0) + xpChange) };
                 const result = await supabaseUpdateUser(updatedAuthor);
                 if (result) {
@@ -666,21 +670,23 @@ export const SourcesView: React.FC<SourcesViewProps> = ({ appData, setAppData, c
                 </button>
             </div>
             
-             <div className="space-y-4">
-                {Array.isArray(sortedSources) 
-                    ? sortedSources.map(renderSourceItem)
-                    : Object.entries(sortedSources as Record<string, Source[]>).map(([groupKey, items]) => (
-                        <div key={groupKey} className="mb-6">
-                            <h2 className="text-2xl font-bold mb-2 border-b-2 border-primary-light dark:border-primary-dark pb-1">
-                                {sort === 'user' ? (appData.users.find(u => u.id === groupKey)?.pseudonym || 'Desconhecido') : groupKey}
-                            </h2>
-                            <div className="space-y-4">
-                                {items.map(renderSourceItem)}
+            {sortedSources.length === 0 ? <div className="text-center p-8">Carregando dados...</div> : (
+                 <div className="space-y-4">
+                    {Array.isArray(sortedSources) 
+                        ? sortedSources.map(renderSourceItem)
+                        : Object.entries(sortedSources as Record<string, Source[]>).map(([groupKey, items]) => (
+                            <div key={groupKey} className="mb-6">
+                                <h2 className="text-2xl font-bold mb-2 border-b-2 border-primary-light dark:border-primary-dark pb-1">
+                                    {sort === 'user' ? (appData.users.find(u => u.id === groupKey)?.pseudonym || 'Desconhecido') : groupKey}
+                                </h2>
+                                <div className="space-y-4">
+                                    {items.map(renderSourceItem)}
+                                </div>
                             </div>
-                        </div>
-                    ))
-                }
-            </div>
+                        ))
+                    }
+                </div>
+            )}
         </>
     );
 };
