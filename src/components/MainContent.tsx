@@ -1,3 +1,6 @@
+
+
+
 import React, { useState, useMemo, useEffect } from 'react';
 import { Theme, View, AppData, User, MainContentProps } from '../types';
 import { VIEWS } from '../constants';
@@ -18,6 +21,7 @@ import { CaseStudyView } from './views/CaseStudyView';
 import { CronogramaView } from './views/CronogramaView';
 import { LinksFilesView } from './views/LinksFilesView';
 import { ContagemView } from './views/ContagemView';
+import { OlhoNoProcapView } from './views/OlhoNoProcapView';
 
 
 export const MainContent: React.FC<MainContentProps> = (props) => {
@@ -65,6 +69,8 @@ export const MainContent: React.FC<MainContentProps> = (props) => {
     switch (activeView.name) {
       case 'Contagem':
         return <ContagemView {...viewProps} />;
+      case 'Olho no Procap':
+        return <OlhoNoProcapView {...viewProps} />;
       case 'Resumos':
         return <SummariesView {...viewProps} allItems={allSummaries} />;
       case 'Flashcards':

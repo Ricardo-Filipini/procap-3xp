@@ -701,7 +701,6 @@ export const NotebookDetailView: React.FC<{
     const [sourceFilter, setSourceFilter] = useState<string>('all');
     
     const [questionErrorRates, setQuestionErrorRates] = useState<Map<string, number>>(new Map());
-    const [globalErrorCounts, setGlobalErrorCounts] = useState<Map<string, number>>(new Map());
 
     useEffect(() => {
         if (!supabase) return;
@@ -712,17 +711,13 @@ export const NotebookDetailView: React.FC<{
             };
             if (data) {
                 const rates = new Map<string, number>();
-                const counts = new Map<string, number>();
                 data.forEach((stat: any) => {
                     if (stat.total_answers > 0) {
                         // error rate = 1 - success rate
                         rates.set(stat.question_id, 1 - (stat.correct_answers / stat.total_answers));
-                        // global errors = total - correct
-                        counts.set(stat.question_id, stat.total_answers - stat.correct_answers);
                     }
                 });
                 setQuestionErrorRates(rates);
-                setGlobalErrorCounts(counts);
             }
         });
     }, []);
@@ -775,6 +770,7 @@ export const NotebookDetailView: React.FC<{
         let questionsToProcess = [...questionsInNotebook];
 
         if (notebook === 'all' && sourceFilter !== 'all') {
+            // Keep currently active question in list to prevent jumping if filters change
             questionsToProcess = questionsToProcess.filter(q => q.source?.id === sourceFilter || q.id === activeQuestionId);
         }
 
@@ -1050,8 +1046,23 @@ export const NotebookDetailView: React.FC<{
             
             let additionalXp = 0;
             if (isCorrectFirstTry) {
-                const globalErrors = globalErrorCounts.get(questionToRender.id) || 0;
-                additionalXp = globalErrors * 3;
+                // Fetch fresh global stats to determine bonus
+                if (supabase) {
+                     const { data: allAnswers } = await supabase
+                        .from('user_question_answers')
+                        .select('attempts')
+                        .eq('question_id', questionToRender.id);
+                     
+                     if (allAnswers) {
+                         const totalErrors = allAnswers.reduce((acc, ans) => {
+                             // Explicitly count attempts that are NOT correct to accurately gauge difficulty
+                             if (!ans.attempts || !Array.isArray(ans.attempts)) return acc;
+                             const errorsInSession = ans.attempts.filter((attempt: string) => attempt !== questionToRender.correctAnswer).length;
+                             return acc + errorsInSession;
+                         }, 0);
+                         additionalXp = totalErrors * 3;
+                     }
+                }
             }
             
             const totalXpGained = baseXpGained + additionalXp;
@@ -1202,6 +1213,11 @@ export const NotebookDetailView: React.FC<{
     const revealedHints = questionToRender.hints.slice(0, wrongAnswers.size);
     const showAllHints = isCompleted && selectedOption === questionToRender.correctAnswer;
     const optionsToRender = shuffledOptions || (questionToRender?.options as string[] || []);
+    
+    // Fix: Ensure stats are only shown if the question is truly completed, avoiding flicker on navigation
+    const isNewQuestionRender = questionToRender?.id !== prevQuestionIdRef.current;
+    const savedAnswer = userAnswers.get(questionToRender?.id || '');
+    const effectivelyCompleted = !!savedAnswer || (isCompleted && !isNewQuestionRender);
 
     return (
       <>
@@ -1430,7 +1446,7 @@ export const NotebookDetailView: React.FC<{
                 onToggleFavorite={(id, state) => handleInteractionUpdate(setAppData, appData, currentUser, updateUser, 'question', id, { is_favorite: !state })}
                 onComment={() => setCommentingOnQuestion(questionToRender)}
                 extraActions={
-                    isCompleted ? (
+                    effectivelyCompleted ? (
                         <button onClick={() => setIsQuestionStatsModalOpen(true)} className="text-gray-500 hover:text-primary-light flex items-center gap-1" title="Ver estatísticas da questão">
                             <MagnifyingGlassIcon className="w-5 h-5"/>
                         </button>

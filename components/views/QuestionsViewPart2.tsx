@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { MainContentProps } from '../../types';
 import { Question, Comment, QuestionNotebook, UserNotebookInteraction, UserQuestionAnswer, Source } from '../../types';
@@ -222,8 +223,7 @@ const QuestionStatsModal: React.FC<{
                     console.error(error);
                 } else {
                     const totalAnswers = data.total_answers || 0;
-                    const incorrectAnswers = totalAnswers - (data.correct_answers || 0);
-
+                    
                     const distributionArray = question.options.map(option => {
                         const count = data.distribution?.[option] || 0;
                         return {
@@ -690,6 +690,7 @@ export const NotebookDetailView: React.FC<{
     const touchStartX = useRef<number | null>(null);
     const touchStartY = useRef<number | null>(null);
     const [shuffledOptions, setShuffledOptions] = useState<string[] | null>(null);
+    const [xpEarned, setXpEarned] = useState<{base: number, bonus: number} | null>(null);
     
     const [questionSortOrder, setQuestionSortOrder] = useState<'temp' | 'date' | 'random'>('temp');
     const [shuffleTrigger, setShuffleTrigger] = useState(0);
@@ -719,7 +720,7 @@ export const NotebookDetailView: React.FC<{
                 setQuestionErrorRates(rates);
             }
         });
-    }, []); // Run only once on mount
+    }, []);
 
     const questionsInNotebook = useMemo(() => {
         if (notebook === 'all') return allQuestions;
@@ -769,7 +770,8 @@ export const NotebookDetailView: React.FC<{
         let questionsToProcess = [...questionsInNotebook];
 
         if (notebook === 'all' && sourceFilter !== 'all') {
-            questionsToProcess = questionsToProcess.filter(q => q.source?.id === sourceFilter);
+            // Keep currently active question in list to prevent jumping if filters change
+            questionsToProcess = questionsToProcess.filter(q => q.source?.id === sourceFilter || q.id === activeQuestionId);
         }
 
         if (showWrongOnly) {
@@ -778,14 +780,15 @@ export const NotebookDetailView: React.FC<{
                     .filter(ans => ans.user_id === currentUser.id && ans.notebook_id === notebookId && !ans.is_correct_first_try)
                     .map(ans => ans.question_id)
             );
-            questionsToProcess = questionsToProcess.filter(q => answeredIncorrectlyIds.has(q.id));
+            questionsToProcess = questionsToProcess.filter(q => answeredIncorrectlyIds.has(q.id) || q.id === activeQuestionId);
         } else if (notebook === 'all' && showUnansweredInAnyNotebook) {
             const answeredInAnyNotebookIds = new Set(appData.userQuestionAnswers.filter(ans => ans.user_id === currentUser.id).map(ans => ans.question_id));
-            questionsToProcess = questionsToProcess.filter(q => !answeredInAnyNotebookIds.has(q.id));
+            questionsToProcess = questionsToProcess.filter(q => !answeredInAnyNotebookIds.has(q.id) || q.id === activeQuestionId);
         }
         
         if (difficultyFilter !== 'all') {
             questionsToProcess = questionsToProcess.filter(q => {
+                if (q.id === activeQuestionId) return true;
                 const errorRate = questionErrorRates.get(q.id) ?? 0.5;
                 if (difficultyFilter === 'Fácil') return errorRate <= difficultyThresholds.easy;
                 if (difficultyFilter === 'Médio') return errorRate > difficultyThresholds.easy && errorRate <= difficultyThresholds.medium;
@@ -825,7 +828,8 @@ export const NotebookDetailView: React.FC<{
     }, [
         questionsInNotebook, questionSortOrder, prioritizeApostilas, notebook, 
         stableRandomSort, showWrongOnly, appData.userQuestionAnswers, currentUser.id, notebookId, 
-        showUnansweredInAnyNotebook, difficultyFilter, questionErrorRates, difficultyThresholds, sourceFilter
+        showUnansweredInAnyNotebook, difficultyFilter, questionErrorRates, difficultyThresholds, sourceFilter,
+        activeQuestionId
     ]);
 
     const currentQuestionIndex = useMemo(() => {
@@ -919,6 +923,7 @@ export const NotebookDetailView: React.FC<{
                 [options[i], options[j]] = [options[j], options[i]];
             }
             setShuffledOptions(options);
+            setXpEarned(null);
         }
 
         const savedAnswer = userAnswers.get(questionToRender.id);
@@ -1035,20 +1040,45 @@ export const NotebookDetailView: React.FC<{
         if ((isCorrect || newWrongAnswers.size >= 3) && !wasAnsweredBefore) {
             const attempts: string[] = [...newWrongAnswers, selectedOption];
             const isCorrectFirstTry = attempts.length === 1 && isCorrect;
+            
             const xpMap = [10, 5, 2, 0];
-            const xpGained = isCorrect ? (xpMap[wrongAnswers.size] || 0) : 0;
+            const baseXpGained = isCorrect ? (xpMap[wrongAnswers.size] || 0) : 0;
+            
+            let additionalXp = 0;
+            if (isCorrectFirstTry) {
+                // Fetch fresh global stats to determine bonus
+                if (supabase) {
+                     const { data: allAnswers } = await supabase
+                        .from('user_question_answers')
+                        .select('attempts')
+                        .eq('question_id', questionToRender.id);
+                     
+                     if (allAnswers) {
+                         const totalErrors = allAnswers.reduce((acc, ans) => {
+                             // Explicitly count attempts that are NOT correct to accurately gauge difficulty
+                             if (!ans.attempts || !Array.isArray(ans.attempts)) return acc;
+                             const errorsInSession = ans.attempts.filter((attempt: string) => attempt !== questionToRender.correctAnswer).length;
+                             return acc + errorsInSession;
+                         }, 0);
+                         additionalXp = totalErrors * 3;
+                     }
+                }
+            }
+            
+            const totalXpGained = baseXpGained + additionalXp;
 
-            if (xpGained > 0) {
-                logXpEvent(currentUser.id, xpGained, 'QUESTION_ANSWER', questionToRender.id).then(newEvent => {
+            if (totalXpGained > 0) {
+                logXpEvent(currentUser.id, totalXpGained, 'QUESTION_ANSWER', questionToRender.id).then(newEvent => {
                     if (newEvent) {
                         setAppData(prev => ({...prev, xp_events: [newEvent, ...prev.xp_events]}));
                     }
                 });
+                setXpEarned({ base: baseXpGained, bonus: additionalXp });
             }
 
             const answerPayload: Partial<UserQuestionAnswer> = {
                 user_id: currentUser.id, notebook_id: notebookId, question_id: questionToRender.id,
-                attempts: attempts, is_correct_first_try: isCorrectFirstTry, xp_awarded: xpGained,
+                attempts: attempts, is_correct_first_try: isCorrectFirstTry, xp_awarded: totalXpGained,
                 timestamp: new Date().toISOString()
             };
             const savedAnswer = await upsertUserQuestionAnswer(answerPayload);
@@ -1071,7 +1101,7 @@ export const NotebookDetailView: React.FC<{
             newStats.topicPerformance[topic].total += 1;
             if (isCorrectFirstTry) newStats.topicPerformance[topic].correct += 1;
             
-            const userWithNewStats = { ...currentUser, stats: newStats, xp: (Number(currentUser.xp) || 0) + xpGained };
+            const userWithNewStats = { ...currentUser, stats: newStats, xp: (Number(currentUser.xp) || 0) + totalXpGained };
             const finalUser = checkAndAwardAchievements(userWithNewStats, appData);
             updateUser(finalUser);
         }
@@ -1183,6 +1213,11 @@ export const NotebookDetailView: React.FC<{
     const revealedHints = questionToRender.hints.slice(0, wrongAnswers.size);
     const showAllHints = isCompleted && selectedOption === questionToRender.correctAnswer;
     const optionsToRender = shuffledOptions || (questionToRender?.options as string[] || []);
+    
+    // Fix: Ensure stats are only shown if the question is truly completed, avoiding flicker on navigation
+    const isNewQuestionRender = questionToRender?.id !== prevQuestionIdRef.current;
+    const savedAnswer = userAnswers.get(questionToRender?.id || '');
+    const effectivelyCompleted = !!savedAnswer || (isCompleted && !isNewQuestionRender);
 
     return (
       <>
@@ -1268,9 +1303,9 @@ export const NotebookDetailView: React.FC<{
                 <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
                     <div className="flex items-center gap-4 flex-shrink-0">
                         <button onClick={onBack} className="text-primary-light dark:text-primary-dark hover:underline">&larr; Voltar</button>
-                        <button onClick={() => setIsStatsModalOpen(true)} className="flex items-center gap-2 px-3 py-1.5 bg-secondary-light text-white text-sm font-semibold rounded-md hover:bg-emerald-600 transition-colors shadow-sm">
+                         <button onClick={() => setIsStatsModalOpen(true)} className="flex items-center gap-2 px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 text-sm font-semibold rounded-md hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors shadow-sm">
                             <ChartBarSquareIcon className="w-5 h-5" />
-                            Estatísticas
+                            Resumo
                         </button>
                     </div>
                     <div className="text-right">
@@ -1382,9 +1417,24 @@ export const NotebookDetailView: React.FC<{
 
             {isCompleted && (
                 <div className="mt-6 p-4 rounded-lg bg-background-light dark:bg-background-dark border border-border-light dark:border-border-dark">
-                    <h3 className={`text-lg font-bold ${selectedOption === questionToRender.correctAnswer ? 'text-green-600' : 'text-red-600'}`}>
-                        {selectedOption === questionToRender.correctAnswer ? "Resposta Correta!" : "Resposta Incorreta!"}
-                    </h3>
+                    <div className="flex justify-between items-center mb-2">
+                        <h3 className={`text-lg font-bold ${selectedOption === questionToRender.correctAnswer ? 'text-green-600' : 'text-red-600'}`}>
+                            {selectedOption === questionToRender.correctAnswer ? "Resposta Correta!" : "Resposta Incorreta!"}
+                        </h3>
+                         {xpEarned && (
+                            <div className="flex flex-col items-end">
+                                <div className="flex items-center gap-1 text-sm font-bold text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/50 px-2 py-1 rounded-full">
+                                    <SparklesIcon className="w-4 h-4" />
+                                    <span>+{xpEarned.base + xpEarned.bonus} XP</span>
+                                </div>
+                                {xpEarned.bonus > 0 && (
+                                    <span className="text-xs font-semibold text-yellow-600 dark:text-yellow-400 mt-1">
+                                        (+{xpEarned.bonus} bônus por dificuldade)
+                                    </span>
+                                )}
+                            </div>
+                        )}
+                    </div>
                     <p className="mt-2">{questionToRender.explanation}</p>
                 </div>
             )}
@@ -1396,9 +1446,11 @@ export const NotebookDetailView: React.FC<{
                 onToggleFavorite={(id, state) => handleInteractionUpdate(setAppData, appData, currentUser, updateUser, 'question', id, { is_favorite: !state })}
                 onComment={() => setCommentingOnQuestion(questionToRender)}
                 extraActions={
-                    <button onClick={() => setIsQuestionStatsModalOpen(true)} className="text-gray-500 hover:text-primary-light flex items-center gap-1" title="Ver estatísticas da questão">
-                        <MagnifyingGlassIcon className="w-5 h-5"/>
-                    </button>
+                    effectivelyCompleted ? (
+                        <button onClick={() => setIsQuestionStatsModalOpen(true)} className="text-gray-500 hover:text-primary-light flex items-center gap-1" title="Ver estatísticas da questão">
+                            <MagnifyingGlassIcon className="w-5 h-5"/>
+                        </button>
+                    ) : null
                 }
             />
 

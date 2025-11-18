@@ -294,6 +294,25 @@ export interface UserMood {
     updated_at: string;
 }
 
+export interface ProcapExamQuestion {
+  id: string;
+  question_number: number;
+  question_text?: string;
+  options?: any; // JSONB
+  ai_correct_answer: string;
+  gabarito_preliminar?: string;
+  created_at: string;
+}
+
+export interface UserExamAnswer {
+  id: string;
+  user_id: string;
+  question_number: number;
+  selected_answer: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AppData {
   users: User[];
   sources: Source[];

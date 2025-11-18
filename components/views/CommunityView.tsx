@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { AppData, User, ChatMessage, MainContentProps, XpEvent } from '../../types';
 import { PaperAirplaneIcon, MinusIcon, PlusIcon, PlayIcon, PauseIcon, ArrowPathIcon } from '../Icons';
@@ -397,9 +398,12 @@ const LeaderboardRaceChart: React.FC<{ users: User[]; xp_events: XpEvent[]; them
     useEffect(() => {
         const animationInterval = setInterval(() => {
             const currentData = displayedDataRef.current;
-            const targetMap = new Map(targetRaceDataRef.current.map(u => [u.id, u.xp]));
+            const targetMap = new Map<string, number>(targetRaceDataRef.current.map(u => [u.id, u.xp]));
             let hasChanged = false;
-            const nextDataMap = new Map(currentData.map(u => [u.id, { ...u }]));
+            
+            // Explicitly type the map to fix 'unknown' type errors
+            const nextDataMap = new Map<string, User & { color: string; xp: number }>();
+            currentData.forEach(u => nextDataMap.set(u.id, { ...u }));
 
             targetMap.forEach((targetXp, userId) => {
                 if (!nextDataMap.has(userId)) {
@@ -411,19 +415,20 @@ const LeaderboardRaceChart: React.FC<{ users: User[]; xp_events: XpEvent[]; them
                 }
             });
 
-            nextDataMap.forEach((user, userId) => {
-                const targetXp = targetMap.get(userId) ?? 0;
-                const diff = targetXp - Number(user.xp || 0);
+            nextDataMap.forEach((user) => {
+                const targetXp = targetMap.get(user.id) ?? 0;
+                const currentXp = Number(user.xp || 0);
+                const diff = targetXp - currentXp;
             
                 if (Math.abs(diff) < 0.5) { // Threshold to stop animation and snap
-                    if (Number(user.xp || 0) !== targetXp) {
+                    if (currentXp !== targetXp) {
                         user.xp = targetXp;
                         hasChanged = true;
                     }
                 } else {
                     // Move a fraction of the distance each frame for a smooth animation
                     const increment = diff * 0.1;
-                    user.xp = Number(user.xp || 0) + increment;
+                    user.xp = currentXp + increment;
                     hasChanged = true;
                 }
             });
@@ -432,7 +437,7 @@ const LeaderboardRaceChart: React.FC<{ users: User[]; xp_events: XpEvent[]; them
                 const sortedNextData = Array.from(nextDataMap.values())
                     .sort((a, b) => Number(b.xp || 0) - Number(a.xp || 0))
                     .slice(0, 15);
-                setDisplayedRaceData(sortedNextData as (User & { color: string; xp: number })[]);
+                setDisplayedRaceData(sortedNextData);
             }
         }, 50);
 

@@ -1,10 +1,10 @@
 
-
 import React from 'react';
 import { AppData, View, ScheduleEvent, AgentSettings } from './types';
-import { BookOpenIcon, SparklesIcon, QuestionMarkCircleIcon, ShareIcon, UserCircleIcon, ShieldCheckIcon, CloudArrowUpIcon, UsersIcon, SpeakerWaveIcon, DocumentTextIcon, CalendarDaysIcon, PaperClipIcon, ClockIcon } from './components/Icons';
+import { BookOpenIcon, SparklesIcon, QuestionMarkCircleIcon, ShareIcon, UserCircleIcon, ShieldCheckIcon, CloudArrowUpIcon, UsersIcon, SpeakerWaveIcon, DocumentTextIcon, CalendarDaysIcon, PaperClipIcon, ClockIcon, EyeIcon } from './components/Icons';
 
 export const VIEWS: View[] = [
+    { name: 'Olho no Procap', icon: EyeIcon },
     { name: 'Questões', icon: QuestionMarkCircleIcon },
     { name: 'Links/Arquivos', icon: PaperClipIcon },
     { name: 'Mídia', icon: SpeakerWaveIcon },
