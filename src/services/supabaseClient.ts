@@ -1,32 +1,7 @@
 
+
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { AppData, User, Source, ChatMessage, UserMessageVote, UserSourceVote, Summary, Flashcard, Question, Comment, MindMap, ContentType, UserContentInteraction, QuestionNotebook, UserNotebookInteraction, UserQuestionAnswer, AudioSummary, CaseStudy, UserCaseStudyInteraction, ScheduleEvent, StudyPlan, LinkFile, XpEvent, UserMood, ProcapExamQuestion, UserExamAnswer } from '../types';
-
-/*
--- SQL CONFIGURATION FOR PROCAP TABLES (Run this in Supabase SQL Editor) --
-
--- Remover políticas antigas que podem estar conflitando
-DROP POLICY IF EXISTS "Permitir leitura de questoes para autenticados" ON public.procap_exam_questions;
-DROP POLICY IF EXISTS "Permitir leitura de todas respostas" ON public.user_exam_answers;
-DROP POLICY IF EXISTS "Permitir inserir propria resposta" ON public.user_exam_answers;
-DROP POLICY IF EXISTS "Permitir atualizar propria resposta" ON public.user_exam_answers;
-DROP POLICY IF EXISTS "Permitir deletar propria resposta" ON public.user_exam_answers;
-
--- Política para PERMITIR TUDO para a role 'anon' (já que o controle de usuário é feito via aplicação)
-CREATE POLICY "Acesso publico questoes" 
-ON public.procap_exam_questions FOR SELECT 
-TO anon, authenticated, service_role 
-USING (true);
-
-CREATE POLICY "Acesso publico respostas" 
-ON public.user_exam_answers FOR ALL 
-TO anon, authenticated, service_role 
-USING (true)
-WITH CHECK (true);
-
-ALTER TABLE public.procap_exam_questions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.user_exam_answers ENABLE ROW LEVEL SECURITY;
-*/
 
 // Tenta usar as variáveis de ambiente do Vite (import.meta.env) primeiro.
 // Se não encontradas, recorre a process.env (para outros ambientes) e, finalmente, a um valor fixo.
@@ -54,6 +29,7 @@ const checkSupabase = () => {
 }
 
 const fetchTable = async (tableName: string, options?: { 
+    select?: string,
     ordering?: { column: string, options: { ascending: boolean } },
     filter?: { column: string, value: any }
 }) => {
@@ -63,7 +39,7 @@ const fetchTable = async (tableName: string, options?: {
     const pageSize = 1000; // Supabase default limit per request
 
     while (true) {
-        let query = supabase!.from(tableName).select('*');
+        let query = supabase!.from(tableName).select(options?.select || '*');
         
         if (options?.ordering) {
             query = query.order(options.ordering.column, options.ordering.options);
@@ -90,95 +66,67 @@ const fetchTable = async (tableName: string, options?: {
     return allData;
 };
 
-// Optimized initial data fetch - EXCLUDING Procap Exam Data to speed up initial load
-export const getInitialData = async (): Promise<{ data: AppData; error: string | null }> => {
+// STAGE 1: Critical Data Only (Fast Load)
+export const getInitialData = async (userId?: string): Promise<{ data: AppData; error: string | null }> => {
     if (!checkSupabase()) return { data: {} as AppData, error: "Supabase client not configured." };
 
     try {
+        const userFilter = userId ? { column: 'user_id', value: userId } : undefined;
+
+        // Fetch only what's needed to render the main UI structure
         const [
             users,
-            sources,
-            linksFiles,
-            chatMessages,
             questionNotebooks,
-            scheduleEvents,
-            studyPlans,
-            userMessageVotes,
-            userSourceVotes,
-            userContentInteractions,
-            userNotebookInteractions,
-            userQuestionAnswers,
-            xp_events,
+            userQuestionAnswers, // Filtered by user for speed
+            userNotebookInteractions, // Filtered by user
             userMoods,
-            caseStudies,
-            userCaseStudyInteractions,
-            // NOTE: Do NOT fetch procap_exam_questions or user_exam_answers here.
-            // They are fetched lazily in OlhoNoProcapView.tsx
+            scheduleEvents,
+            sourcesMetadata,
+            // We fetch basic question info (ID/Source) to calculate notebook totals, but NOT the text/options yet
+            questionsMetadata,
+            userContentInteractions // Filtered by user
         ] = await Promise.all([
             fetchTable('users'),
-            fetchTable('sources', { ordering: { column: 'created_at', options: { ascending: false } } }),
-            fetchTable('links_files', { ordering: { column: 'created_at', options: { ascending: false } } }),
-            fetchTable('chat_messages', { ordering: { column: 'timestamp', options: { ascending: true } } }),
             fetchTable('question_notebooks', { ordering: { column: 'created_at', options: { ascending: false } } }),
-            fetchTable('schedule_events', { ordering: { column: 'date', options: { ascending: true } } }),
-            fetchTable('study_plans'),
-            fetchTable('user_message_votes'),
-            fetchTable('user_source_votes'),
-            fetchTable('user_content_interactions'),
-            fetchTable('user_notebook_interactions'),
-            fetchTable('user_question_answers'),
-            fetchTable('xp_events', { ordering: { column: 'created_at', options: { ascending: false } } }),
+            fetchTable('user_question_answers', { filter: userFilter }),
+            fetchTable('user_notebook_interactions', { filter: userFilter }),
             fetchTable('user_moods'),
-            fetchTable('case_studies'),
-            fetchTable('user_case_study_interactions')
+            fetchTable('schedule_events', { ordering: { column: 'date', options: { ascending: true } } }),
+            fetchTable('sources', { ordering: { column: 'created_at', options: { ascending: false } } }), 
+            fetchTable('questions', { select: 'id, source_id' }), // Lightweight fetch for counts
+            fetchTable('user_content_interactions', { filter: userFilter })
         ]);
         
-        const sourcesWithContent = await Promise.all(sources.map(async (source: any) => {
-             const [summaries, flashcards, questions, mind_maps, audio_summaries] = await Promise.all([
-                supabase!.from('summaries').select('*').eq('source_id', source.id),
-                supabase!.from('flashcards').select('*').eq('source_id', source.id),
-                supabase!.from('questions').select('*').eq('source_id', source.id),
-                supabase!.from('mind_maps').select('*').eq('source_id', source.id),
-                supabase!.from('audio_summaries').select('*').eq('source_id', source.id),
-            ]);
-            
+        // Construct initial Sources with empty content arrays (to be filled in background)
+        // But include questions with just IDs so counts work in NotebookView
+        const sourcesWithPlaceholders = sourcesMetadata.map((source: any) => {
             return {
                 ...source,
-                summaries: (summaries.data || []).map((s: any) => ({...s, keyPoints: s.key_points})),
-                flashcards: flashcards.data || [],
-                questions: (questions.data || []).map((q: any) => ({...q, questionText: q.question_text, correctAnswer: q.correct_answer})),
-                mind_maps: (mind_maps.data || []).map((m: any) => ({...m, imageUrl: m.image_url})),
-                audio_summaries: (audio_summaries.data || []).map((a: any) => ({...a, audioUrl: a.audio_url})),
+                summaries: [],
+                flashcards: [],
+                // Map the lightweight questions so "All Questions" count works immediately
+                questions: questionsMetadata.filter((q: any) => q.source_id === source.id).map((q:any) => ({...q, questionText: '', options: [], correctAnswer: '', explanation: ''})),
+                mind_maps: [],
+                audio_summaries: [],
             };
-        }));
-
-        const totalXpMap = new Map<string, number>();
-        xp_events.forEach((event: XpEvent) => {
-           const currentXp = totalXpMap.get(event.user_id) || 0;
-           totalXpMap.set(event.user_id, currentXp + event.amount);
         });
-        const updatedUsers = users.map((user: User) => ({
-            ...user,
-            xp: totalXpMap.get(user.id) || user.xp,
-        }));
-
 
         const data: AppData = {
-            users: updatedUsers,
-            sources: sourcesWithContent,
-            linksFiles,
-            chatMessages,
+            users,
+            sources: sourcesWithPlaceholders,
+            linksFiles: [],
+            chatMessages: [], // Load later
             questionNotebooks,
-            caseStudies,
+            caseStudies: [], // Load later
             scheduleEvents,
-            studyPlans,
-            userMessageVotes,
-            userSourceVotes,
-            userContentInteractions,
-            userNotebookInteractions,
-            userQuestionAnswers,
-            userCaseStudyInteractions,
-            xp_events,
+            studyPlans: [], // Load later
+            userMessageVotes: [],
+            userSourceVotes: [],
+            userContentInteractions: userContentInteractions as any,
+            userNotebookInteractions: userNotebookInteractions as any,
+            userQuestionAnswers: userQuestionAnswers as any,
+            userCaseStudyInteractions: [],
+            xp_events: [], // Load later
             userMoods,
         };
 
@@ -186,6 +134,72 @@ export const getInitialData = async (): Promise<{ data: AppData; error: string |
     } catch (error: any) {
         console.error("Error in getInitialData:", error);
         return { data: {} as AppData, error: error.message };
+    }
+};
+
+// STAGE 2: Heavy Data (Background Load)
+export const getBackgroundData = async (currentUserId?: string): Promise<Partial<AppData>> => {
+    if (!checkSupabase()) return {};
+
+    try {
+        const [
+            linksFiles,
+            chatMessages,
+            studyPlans,
+            userMessageVotes,
+            userSourceVotes,
+            // Fetch GLOBAL interactions/answers if needed for community stats, 
+            // or just the rest if we only fetched user specific ones before.
+            // For simplicity/performance trade-off, we might skip full global answers download 
+            // and rely on RPCs for global stats, downloading only text content here.
+            xp_events,
+            caseStudies,
+            userCaseStudyInteractions,
+            // Content tables - Heavy stuff
+            allSummaries,
+            allFlashcards,
+            allQuestionsFull,
+            allMindMaps,
+            allAudioSummaries
+        ] = await Promise.all([
+            fetchTable('links_files', { ordering: { column: 'created_at', options: { ascending: false } } }),
+            fetchTable('chat_messages', { ordering: { column: 'timestamp', options: { ascending: true } } }),
+            fetchTable('study_plans'),
+            fetchTable('user_message_votes'),
+            fetchTable('user_source_votes'),
+            fetchTable('xp_events', { ordering: { column: 'created_at', options: { ascending: false } } }),
+            fetchTable('case_studies'),
+            fetchTable('user_case_study_interactions'),
+            fetchTable('summaries'),
+            fetchTable('flashcards'),
+            fetchTable('questions'), // Now fetching full text
+            fetchTable('mind_maps'),
+            fetchTable('audio_summaries')
+        ]);
+
+        return {
+            linksFiles,
+            chatMessages,
+            studyPlans,
+            userMessageVotes,
+            userSourceVotes,
+            // Note: We don't merge user_question_answers here to avoid overwriting current user state 
+            // with a massive list. Global stats should use RPCs.
+            xp_events,
+            caseStudies,
+            userCaseStudyInteractions,
+            // @ts-ignore - passing temporary data for merging in App.tsx
+            _rawContent: {
+                summaries: allSummaries,
+                flashcards: allFlashcards,
+                questions: allQuestionsFull,
+                mind_maps: allMindMaps,
+                audio_summaries: allAudioSummaries
+            }
+        };
+    } catch (error) {
+        console.error("Error fetching background data:", error);
+        return {};
     }
 };
 
@@ -200,8 +214,7 @@ export const getUsers = async (): Promise<{ users: User[]; error: string | null;
 };
 
 export const getCoreData = async (userId: string): Promise<{ data: Partial<Omit<AppData, 'users'>>; error: string | null; }> => {
-    // Kept for compatibility but getInitialData is preferred now
-    return getInitialData().then(res => ({ data: res.data, error: res.error }));
+    return getInitialData(userId).then(res => ({ data: res.data, error: res.error }));
 };
 
 export const getCommunityData = async (): Promise<Partial<AppData>> => {

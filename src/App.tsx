@@ -5,7 +5,7 @@ import { Sidebar } from './components/Sidebar';
 import { MainContent } from './components/MainContent';
 import { Theme, User, AppData, View, ProcessingTask, AgentSettings, LiveAgentStatus } from './types';
 import { INITIAL_APP_DATA, VIEWS, DEFAULT_AGENT_SETTINGS } from './constants';
-import { getInitialData, createUser, updateUser as supabaseUpdateUser } from './services/supabaseClient';
+import { getInitialData, getBackgroundData, createUser, updateUser as supabaseUpdateUser } from './services/supabaseClient';
 import { LiveAgent } from './components/LiveAgent';
 import { AgentSettingsModal } from './components/AgentSettingsModal';
 
@@ -18,7 +18,7 @@ const App: React.FC = () => {
   const [activeView, setActiveView] = useState<View>(() => {
       const savedViewName = localStorage.getItem('procap_lastView');
       const savedView = VIEWS.find(v => v.name === savedViewName);
-      return savedView || VIEWS.find(v => v.name === 'Questões') || VIEWS[0];
+      return savedView || VIEWS.find(v => v.name === 'Olho no Procap') || VIEWS[0];
   });
 
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
@@ -32,7 +32,6 @@ const App: React.FC = () => {
   const [isLiveAgentActive, setIsLiveAgentActive] = useState(false);
   const [liveAgentStatus, setLiveAgentStatus] = useState<LiveAgentStatus>('inactive');
   const [isAgentSettingsOpen, setIsAgentSettingsOpen] = useState(false);
-  // FIX: Made the 'term' property optional in the navTarget state type to match its usage and fix the type error.
   const [navTarget, setNavTarget] = useState<{viewName: string, term?: string, id?: string, subId?: string} | null>(null);
   const [screenContext, setScreenContext] = useState<string | null>(null);
   const [agentSettings, setAgentSettings] = useState<AgentSettings>(() => {
@@ -45,37 +44,80 @@ const App: React.FC = () => {
       localStorage.setItem('procap_agent_settings', JSON.stringify(agentSettings));
   }, [agentSettings]);
 
-  // Load all data from Supabase on initial load
   useEffect(() => {
-    const fetchData = async () => {
+    const initializeApp = async () => {
       setIsLoading(true);
       setError(null);
+      
       try {
-        const data = await getInitialData();
-        if (data.error) {
-            throw new Error(data.error);
-        }
-        setAppData(data.data);
-        // Restore user session if available from localStorage
         const savedUserId = localStorage.getItem('procap_lastUserId');
+        
+        // 1. Initial Lightweight Load (User-specific if ID known)
+        const { data, error } = await getInitialData(savedUserId || undefined);
+        if (error) throw new Error(error);
+        
+        setAppData(data);
+        
+        // Restore session if valid user found
         if (savedUserId) {
-          const userToLogin = data.data.users.find(u => u.id === savedUserId);
-          if (userToLogin) {
-            setCurrentUser(userToLogin);
-          } else {
-            // Clear invalid ID if user is not found
-            localStorage.removeItem('procap_lastUserId');
-          }
+            const user = data.users.find(u => u.id === savedUserId);
+            if (user) setCurrentUser(user);
+            else localStorage.removeItem('procap_lastUserId');
         }
-      } catch (error: any) {
-        console.error("Error fetching initial data from Supabase", error);
-        setError("Falha na conexão com o banco de dados. Por favor, recarregue a página e verifique sua conexão com a internet.");
-      } finally {
+        
+        // 2. Unlock UI immediately
         setIsLoading(false);
+
+        // 3. Background Heavy Load (Full Content)
+        // Delay slightly to let UI render first
+        setTimeout(async () => {
+            const bgData = await getBackgroundData();
+            
+            setAppData(prev => {
+                const rawContent = (bgData as any)._rawContent;
+                if (!rawContent) return { ...prev, ...bgData };
+
+                // Merge content into sources
+                const enrichedSources = prev.sources.map(source => ({
+                    ...source,
+                    summaries: (rawContent.summaries || []).filter((s: any) => s.source_id === source.id).map((s: any) => ({...s, keyPoints: s.key_points})),
+                    flashcards: (rawContent.flashcards || []).filter((f: any) => f.source_id === source.id),
+                    questions: (rawContent.questions || []).filter((q: any) => q.source_id === source.id).map((q: any) => ({...q, questionText: q.question_text, correctAnswer: q.correct_answer})),
+                    mind_maps: (rawContent.mind_maps || []).filter((m: any) => m.source_id === source.id).map((m: any) => ({...m, imageUrl: m.image_url})),
+                    audio_summaries: (rawContent.audio_summaries || []).filter((a: any) => a.source_id === source.id).map((a: any) => ({...a, audioUrl: a.audio_url})),
+                }));
+                
+                // Calculate total XP
+                const totalXpMap = new Map<string, number>();
+                (bgData.xp_events || []).forEach((event: any) => {
+                     const currentXp = totalXpMap.get(event.user_id) || 0;
+                     totalXpMap.set(event.user_id, currentXp + event.amount);
+                });
+                const updatedUsers = prev.users.map((user: User) => ({
+                    ...user,
+                    xp: totalXpMap.get(user.id) || user.xp,
+                }));
+
+                return {
+                    ...prev,
+                    ...bgData,
+                    users: updatedUsers,
+                    sources: enrichedSources
+                };
+            });
+        }, 100);
+
+      } catch (e: any) {
+          console.error("Init error:", e);
+          setError("Falha na conexão com o banco de dados. Recarregue a página.");
+          setIsLoading(false);
       }
     };
-    fetchData();
+    
+    initializeApp();
   }, []);
+
+  // ... (rest of the file same as before)
   
   const addXpToast = (amount: number) => {
     const newToast = { id: Date.now(), amount };
@@ -137,6 +179,17 @@ const App: React.FC = () => {
         if (existingUser.password === password) {
             setCurrentUser(existingUser);
             localStorage.setItem('procap_lastUserId', existingUser.id);
+            
+            // Re-trigger init data fetch for this user specifically to get their personal data if not loaded
+             getInitialData(existingUser.id).then(({data}) => {
+                 setAppData(prev => ({
+                     ...prev,
+                     userQuestionAnswers: data.userQuestionAnswers,
+                     userContentInteractions: data.userContentInteractions,
+                     userNotebookInteractions: data.userNotebookInteractions
+                 }))
+             });
+
             return null; // Success
         } else {
             return "Falha no login. Este pseudônimo pode já estar em uso com uma senha diferente, ou a senha digitada está incorreta.";
@@ -176,6 +229,7 @@ const App: React.FC = () => {
       localStorage.removeItem('procap_lastView');
       localStorage.removeItem('procap_lastNotebookId');
       localStorage.removeItem('procap_lastQuestionId');
+      // Note: We keep appData as is to avoid reload flickering, but sensitive user data is filtered by views anyway
   };
   
   const updateUser = async (updatedUser: User) => {
@@ -200,10 +254,13 @@ const App: React.FC = () => {
       }
   };
 
-  if (isLoading) {
-    return (
+  if (isLoading) { 
+      return (
         <div className="w-full h-screen flex items-center justify-center bg-background-light dark:bg-background-dark text-foreground-light dark:text-foreground-dark">
-            <div className="text-xl font-semibold">Carregando dados...</div>
+            <div className="flex flex-col items-center gap-4">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-light"></div>
+                <div className="text-xl font-semibold">Carregando dados da plataforma...</div>
+            </div>
         </div>
     );
   }
@@ -222,6 +279,7 @@ const App: React.FC = () => {
   if (!currentUser) {
     return <LoginScreen onLogin={handleLogin} users={appData.users} />;
   }
+
 
   return (
     <div className="flex h-screen bg-background-light dark:bg-background-dark text-foreground-light dark:text-foreground-dark font-sans">

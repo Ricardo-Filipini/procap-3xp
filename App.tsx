@@ -1,11 +1,10 @@
 
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { MainContent } from './components/MainContent';
 import { Theme, User, AppData, View, ProcessingTask, AgentSettings, LiveAgentStatus } from './types';
 import { INITIAL_APP_DATA, VIEWS, DEFAULT_AGENT_SETTINGS } from './constants';
-import { getCoreData, getUsers, createUser, updateUser as supabaseUpdateUser } from './services/supabaseClient';
+import { getInitialData, getBackgroundData, createUser, updateUser as supabaseUpdateUser } from './services/supabaseClient';
 import { LiveAgent } from './components/LiveAgent';
 import { AgentSettingsModal } from './components/AgentSettingsModal';
 
@@ -18,7 +17,7 @@ const App: React.FC = () => {
   const [activeView, setActiveView] = useState<View>(() => {
       const savedViewName = localStorage.getItem('procap_lastView');
       const savedView = VIEWS.find(v => v.name === savedViewName);
-      return savedView || VIEWS.find(v => v.name === 'Questões') || VIEWS[0];
+      return savedView || VIEWS.find(v => v.name === 'Olho no Procap') || VIEWS[0];
   });
 
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
@@ -44,56 +43,81 @@ const App: React.FC = () => {
       localStorage.setItem('procap_agent_settings', JSON.stringify(agentSettings));
   }, [agentSettings]);
 
-  // Stage 1: Fetch only users for login screen
   useEffect(() => {
-    const fetchLoginData = async () => {
+    const initializeApp = async () => {
       setIsLoading(true);
       setError(null);
+      
       try {
-        const { users, error } = await getUsers();
+        const savedUserId = localStorage.getItem('procap_lastUserId');
+        
+        // 1. Initial Blocking Load (User + Study Core)
+        // This includes Question Notebooks and ALL Questions to ensure state restoration.
+        const { data, error } = await getInitialData(savedUserId || undefined);
         if (error) throw new Error(error);
         
-        const initialAppData = { ...INITIAL_APP_DATA, users };
-        setAppData(initialAppData);
+        setAppData(data);
         
-        const savedUserId = localStorage.getItem('procap_lastUserId');
-        const userToLogin = savedUserId ? users.find(u => u.id === savedUserId) : null;
-        
-        if (userToLogin) {
-          setCurrentUser(userToLogin); // This will trigger the next useEffect to fetch core data
-        } else {
-          setIsLoading(false); // No saved user, proceed to login screen
+        // Restore session if valid user found
+        if (savedUserId) {
+            const user = data.users.find(u => u.id === savedUserId);
+            if (user) setCurrentUser(user);
+            else localStorage.removeItem('procap_lastUserId');
         }
-      } catch (e: any) {
-        console.error("Error fetching login data", e);
-        setError("Falha na conexão com o banco de dados. Por favor, recarregue a página.");
+        
+        // 2. Unlock UI
         setIsLoading(false);
+
+        // 3. Background Load (Library & Community Content)
+        // Loads Summaries, Flashcards, Chat, etc.
+        setTimeout(async () => {
+            const bgData = await getBackgroundData();
+            
+            setAppData(prev => {
+                const rawContent = (bgData as any)._rawContent;
+                if (!rawContent) return { ...prev, ...bgData };
+
+                // Merge content into sources, preserving existing questions
+                const enrichedSources = prev.sources.map(source => ({
+                    ...source,
+                    summaries: (rawContent.summaries || []).filter((s: any) => s.source_id === source.id).map((s: any) => ({...s, keyPoints: s.key_points})),
+                    flashcards: (rawContent.flashcards || []).filter((f: any) => f.source_id === source.id),
+                    // NOTE: Questions are already loaded in Stage 1, so we keep them.
+                    questions: source.questions, 
+                    mind_maps: (rawContent.mind_maps || []).filter((m: any) => m.source_id === source.id).map((m: any) => ({...m, imageUrl: m.image_url})),
+                    audio_summaries: (rawContent.audio_summaries || []).filter((a: any) => a.source_id === source.id).map((a: any) => ({...a, audioUrl: a.audio_url})),
+                }));
+                
+                // Calculate total XP
+                const totalXpMap = new Map<string, number>();
+                (bgData.xp_events || []).forEach((event: any) => {
+                     const currentXp = totalXpMap.get(event.user_id) || 0;
+                     totalXpMap.set(event.user_id, currentXp + event.amount);
+                });
+                const updatedUsers = prev.users.map((user: User) => ({
+                    ...user,
+                    xp: totalXpMap.get(user.id) || user.xp,
+                }));
+
+                return {
+                    ...prev,
+                    ...bgData,
+                    users: updatedUsers,
+                    sources: enrichedSources
+                };
+            });
+        }, 100);
+
+      } catch (e: any) {
+          console.error("Init error:", e);
+          setError("Falha na conexão com o banco de dados. Recarregue a página.");
+          setIsLoading(false);
       }
     };
-    fetchLoginData();
+    
+    initializeApp();
   }, []);
 
-  // Stage 2: Fetch core app data after user is logged in
-  useEffect(() => {
-    if (currentUser && appData.sources.length === 0) { // Check if core data hasn't been loaded
-      const fetchCoreData = async () => {
-        setIsLoading(true);
-        try {
-          const { data, error } = await getCoreData(currentUser.id);
-          if (error) throw new Error(error);
-          
-          setAppData(prev => ({ ...prev, ...data }));
-        } catch (e: any) {
-          console.error("Error fetching core app data", e);
-          setError("Falha ao carregar os dados da plataforma. Tente recarregar a página.");
-        } finally {
-          setIsLoading(false);
-        }
-      };
-      fetchCoreData();
-    }
-  }, [currentUser, appData.sources]);
-  
   const addXpToast = (amount: number) => {
     const newToast = { id: Date.now(), amount };
     setXpToasts(prev => [...prev, newToast]);
@@ -154,6 +178,17 @@ const App: React.FC = () => {
         if (existingUser.password === password) {
             setCurrentUser(existingUser);
             localStorage.setItem('procap_lastUserId', existingUser.id);
+            
+            // Re-trigger init data fetch for this user specifically to get their personal data if not loaded
+             getInitialData(existingUser.id).then(({data}) => {
+                 setAppData(prev => ({
+                     ...prev,
+                     userQuestionAnswers: data.userQuestionAnswers,
+                     userContentInteractions: data.userContentInteractions,
+                     userNotebookInteractions: data.userNotebookInteractions
+                 }))
+             });
+
             return null; // Success
         } else {
             return "Falha no login. Este pseudônimo pode já estar em uso com uma senha diferente, ou a senha digitada está incorreta.";
@@ -193,8 +228,7 @@ const App: React.FC = () => {
       localStorage.removeItem('procap_lastView');
       localStorage.removeItem('procap_lastNotebookId');
       localStorage.removeItem('procap_lastQuestionId');
-      // Reset app data to avoid showing previous user's data on next login
-      setAppData(INITIAL_APP_DATA);
+      // Note: We keep appData as is to avoid reload flickering, but sensitive user data is filtered by views anyway
   };
   
   const updateUser = async (updatedUser: User) => {
@@ -219,10 +253,13 @@ const App: React.FC = () => {
       }
   };
 
-  if (isLoading && !currentUser) { // Show loading only before login screen is ready
-    return (
+  if (isLoading) { 
+      return (
         <div className="w-full h-screen flex items-center justify-center bg-background-light dark:bg-background-dark text-foreground-light dark:text-foreground-dark">
-            <div className="text-xl font-semibold">Carregando...</div>
+            <div className="flex flex-col items-center gap-4">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-light"></div>
+                <div className="text-xl font-semibold">Carregando dados da plataforma...</div>
+            </div>
         </div>
     );
   }
@@ -240,14 +277,6 @@ const App: React.FC = () => {
 
   if (!currentUser) {
     return <LoginScreen onLogin={handleLogin} users={appData.users} />;
-  }
-  
-  if (isLoading) { // Show a different loading message after login while core data loads
-      return (
-        <div className="w-full h-screen flex items-center justify-center bg-background-light dark:bg-background-dark text-foreground-light dark:text-foreground-dark">
-            <div className="text-xl font-semibold">Carregando dados da plataforma...</div>
-        </div>
-    );
   }
 
 

@@ -1,11 +1,6 @@
 
-
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { AppData, User, Source, ChatMessage, UserMessageVote, UserSourceVote, Summary, Flashcard, Question, Comment, MindMap, ContentType, UserContentInteraction, QuestionNotebook, UserNotebookInteraction, UserQuestionAnswer, AudioSummary, CaseStudy, UserCaseStudyInteraction, ScheduleEvent, StudyPlan, LinkFile, XpEvent, UserMood, ProcapExamQuestion, UserExamAnswer } from '../types';
-
-/*
--- =... (SQL instructions unchanged) ...
-*/
 
 // Tenta usar as variáveis de ambiente do Vite (import.meta.env) primeiro.
 // Se não encontradas, recorre a process.env (para outros ambientes) e, finalmente, a um valor fixo.
@@ -33,6 +28,7 @@ const checkSupabase = () => {
 }
 
 const fetchTable = async (tableName: string, options?: { 
+    select?: string,
     ordering?: { column: string, options: { ascending: boolean } },
     filter?: { column: string, value: any }
 }) => {
@@ -42,7 +38,7 @@ const fetchTable = async (tableName: string, options?: {
     const pageSize = 1000; // Supabase default limit per request
 
     while (true) {
-        let query = supabase!.from(tableName).select('*');
+        let query = supabase!.from(tableName).select(options?.select || '*');
         
         if (options?.ordering) {
             query = query.order(options.ordering.column, options.ordering.options);
@@ -69,100 +65,69 @@ const fetchTable = async (tableName: string, options?: {
     return allData;
 };
 
-// Optimized initial data fetch with BULK loading
-export const getInitialData = async (): Promise<{ data: AppData; error: string | null }> => {
+// STAGE 1: Study Core Data (Blocking Load)
+// Fetches Users, Notebooks, Questions, Answers, and Schedule.
+// This ensures the "Questions" view works immediately upon load.
+export const getInitialData = async (userId?: string): Promise<{ data: AppData; error: string | null }> => {
     if (!checkSupabase()) return { data: {} as AppData, error: "Supabase client not configured." };
 
     try {
-        // Fetch ALL tables in parallel to avoid N+1 query problem
+        const userFilter = userId ? { column: 'user_id', value: userId } : undefined;
+
         const [
             users,
-            sources,
-            linksFiles,
-            chatMessages,
             questionNotebooks,
-            scheduleEvents,
-            studyPlans,
-            userMessageVotes,
-            userSourceVotes,
-            userContentInteractions,
-            userNotebookInteractions,
-            userQuestionAnswers,
-            xp_events,
+            userQuestionAnswers, // Filtered by user for speed
+            userNotebookInteractions, // Filtered by user
             userMoods,
-            caseStudies,
-            userCaseStudyInteractions,
-            // Bulk content tables
-            allSummaries,
-            allFlashcards,
-            allQuestions,
-            allMindMaps,
-            allAudioSummaries
+            scheduleEvents,
+            sourcesMetadata,
+            allQuestions, // Fetching FULL questions here to ensure notebook functionality
+            userContentInteractions // Filtered by user
         ] = await Promise.all([
             fetchTable('users'),
-            fetchTable('sources', { ordering: { column: 'created_at', options: { ascending: false } } }),
-            fetchTable('links_files', { ordering: { column: 'created_at', options: { ascending: false } } }),
-            fetchTable('chat_messages', { ordering: { column: 'timestamp', options: { ascending: true } } }),
             fetchTable('question_notebooks', { ordering: { column: 'created_at', options: { ascending: false } } }),
-            fetchTable('schedule_events', { ordering: { column: 'date', options: { ascending: true } } }),
-            fetchTable('study_plans'),
-            fetchTable('user_message_votes'),
-            fetchTable('user_source_votes'), // Corrected table name case
-            fetchTable('user_content_interactions'),
-            fetchTable('user_notebook_interactions'),
-            fetchTable('user_question_answers'),
-            fetchTable('xp_events', { ordering: { column: 'created_at', options: { ascending: false } } }),
+            fetchTable('user_question_answers', { filter: userFilter }),
+            fetchTable('user_notebook_interactions', { filter: userFilter }),
             fetchTable('user_moods'),
-            fetchTable('case_studies'),
-            fetchTable('user_case_study_interactions'),
-            // Fetch all content items at once
-            fetchTable('summaries'),
-            fetchTable('flashcards'),
-            fetchTable('questions'),
-            fetchTable('mind_maps'),
-            fetchTable('audio_summaries')
+            fetchTable('schedule_events', { ordering: { column: 'date', options: { ascending: true } } }),
+            fetchTable('sources', { ordering: { column: 'created_at', options: { ascending: false } } }), 
+            fetchTable('questions'), // Heavy but necessary for immediate interactivity
+            fetchTable('user_content_interactions', { filter: userFilter })
         ]);
         
-        // Efficiently map content to sources in memory
-        const sourcesWithContent = sources.map((source: any) => {
+        // Construct initial Sources with populated Questions (but empty other content)
+        const sourcesWithQuestions = sourcesMetadata.map((source: any) => {
             return {
                 ...source,
-                summaries: allSummaries.filter((s: any) => s.source_id === source.id).map((s: any) => ({...s, keyPoints: s.key_points})),
-                flashcards: allFlashcards.filter((f: any) => f.source_id === source.id),
-                questions: allQuestions.filter((q: any) => q.source_id === source.id).map((q: any) => ({...q, questionText: q.question_text, correctAnswer: q.correct_answer})),
-                mind_maps: allMindMaps.filter((m: any) => m.source_id === source.id).map((m: any) => ({...m, imageUrl: m.image_url})),
-                audio_summaries: allAudioSummaries.filter((a: any) => a.source_id === source.id).map((a: any) => ({...a, audioUrl: a.audio_url})),
+                summaries: [],
+                flashcards: [],
+                questions: allQuestions.filter((q: any) => q.source_id === source.id).map((q: any) => ({
+                    ...q, 
+                    questionText: q.question_text, // Map snake_case DB to camelCase Model
+                    correctAnswer: q.correct_answer
+                })),
+                mind_maps: [],
+                audio_summaries: [],
             };
         });
 
-        // Add XP from events to users in memory for leaderboard
-        const totalXpMap = new Map<string, number>();
-        xp_events.forEach((event: XpEvent) => {
-           const currentXp = totalXpMap.get(event.user_id) || 0;
-           totalXpMap.set(event.user_id, currentXp + event.amount);
-        });
-        const updatedUsers = users.map((user: User) => ({
-            ...user,
-            xp: totalXpMap.get(user.id) || user.xp,
-        }));
-
-
         const data: AppData = {
-            users: updatedUsers,
-            sources: sourcesWithContent,
-            linksFiles,
-            chatMessages,
+            users,
+            sources: sourcesWithQuestions,
+            linksFiles: [],
+            chatMessages: [], // Load later
             questionNotebooks,
-            caseStudies,
+            caseStudies: [], // Load later
             scheduleEvents,
-            studyPlans,
-            userMessageVotes,
-            userSourceVotes: userSourceVotes as any, 
-            userContentInteractions,
-            userNotebookInteractions,
-            userQuestionAnswers,
-            userCaseStudyInteractions,
-            xp_events,
+            studyPlans: [], // Load later
+            userMessageVotes: [],
+            userSourceVotes: [],
+            userContentInteractions: userContentInteractions as any,
+            userNotebookInteractions: userNotebookInteractions as any,
+            userQuestionAnswers: userQuestionAnswers as any,
+            userCaseStudyInteractions: [],
+            xp_events: [], // Load later
             userMoods,
         };
 
@@ -172,6 +137,105 @@ export const getInitialData = async (): Promise<{ data: AppData; error: string |
         return { data: {} as AppData, error: error.message };
     }
 };
+
+// STAGE 2: Background Data (Non-Blocking)
+// Fetches Summaries, Flashcards, Chat, and Community History
+export const getBackgroundData = async (currentUserId?: string): Promise<Partial<AppData>> => {
+    if (!checkSupabase()) return {};
+
+    try {
+        const [
+            linksFiles,
+            chatMessages,
+            studyPlans,
+            userMessageVotes,
+            userSourceVotes,
+            xp_events,
+            caseStudies,
+            userCaseStudyInteractions,
+            // Content tables
+            allSummaries,
+            allFlashcards,
+            allMindMaps,
+            allAudioSummaries
+        ] = await Promise.all([
+            fetchTable('links_files', { ordering: { column: 'created_at', options: { ascending: false } } }),
+            fetchTable('chat_messages', { ordering: { column: 'timestamp', options: { ascending: true } } }),
+            fetchTable('study_plans'),
+            fetchTable('user_message_votes'),
+            fetchTable('user_source_votes'),
+            fetchTable('xp_events', { ordering: { column: 'created_at', options: { ascending: false } } }),
+            fetchTable('case_studies'),
+            fetchTable('user_case_study_interactions'),
+            fetchTable('summaries'),
+            fetchTable('flashcards'),
+            fetchTable('mind_maps'),
+            fetchTable('audio_summaries')
+        ]);
+
+        return {
+            linksFiles,
+            chatMessages,
+            studyPlans,
+            userMessageVotes,
+            userSourceVotes,
+            xp_events,
+            caseStudies,
+            userCaseStudyInteractions,
+            // @ts-ignore - passing temporary data for merging in App.tsx
+            _rawContent: {
+                summaries: allSummaries,
+                flashcards: allFlashcards,
+                mind_maps: allMindMaps,
+                audio_summaries: allAudioSummaries
+            }
+        };
+    } catch (error) {
+        console.error("Error fetching background data:", error);
+        return {};
+    }
+};
+
+// Deprecated but kept for interface compatibility if needed (returns empty now)
+export const getSecondaryData = async (userId: string): Promise<Partial<AppData>> => {
+    return {};
+}
+
+export const getQuestionsByIds = async (questionIds: string[]): Promise<Question[]> => {
+    // Since questions are now loaded in InitialData, this might be less used,
+    // but useful for specific refetching logic.
+    if (!checkSupabase() || questionIds.length === 0) return [];
+    
+    try {
+        const batchSize = 100;
+        const batches = [];
+        for (let i = 0; i < questionIds.length; i += batchSize) {
+            batches.push(questionIds.slice(i, i + batchSize));
+        }
+
+        let allQuestions: any[] = [];
+
+        for (const batch of batches) {
+            const { data, error } = await supabase!
+                .from('questions')
+                .select('*')
+                .in('id', batch);
+                
+            if (error) throw error;
+            if (data) allQuestions = [...allQuestions, ...data];
+        }
+        
+        return allQuestions.map((q: any) => ({
+            ...q,
+            questionText: q.question_text,
+            correctAnswer: q.correct_answer,
+        }));
+    } catch (error) {
+        console.error("Error fetching specific questions:", error);
+        return [];
+    }
+}
+
 
 export const getUsers = async (): Promise<{ users: User[]; error: string | null; }> => {
     if (!checkSupabase()) return { users: [], error: "Supabase client not configured." };
@@ -184,8 +248,7 @@ export const getUsers = async (): Promise<{ users: User[]; error: string | null;
 };
 
 export const getCoreData = async (userId: string): Promise<{ data: Partial<Omit<AppData, 'users'>>; error: string | null; }> => {
-    // Kept for compatibility but getInitialData is preferred now
-    return getInitialData().then(res => ({ data: res.data, error: res.error }));
+    return getInitialData(userId).then(res => ({ data: res.data, error: res.error }));
 };
 
 export const getCommunityData = async (): Promise<Partial<AppData>> => {

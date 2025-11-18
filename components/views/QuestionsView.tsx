@@ -1,3 +1,8 @@
+
+
+
+
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { MainContentProps } from '../../types';
 import { Question, Comment, QuestionNotebook, UserNotebookInteraction, UserQuestionAnswer } from '../../types';
@@ -6,7 +11,7 @@ import { ContentToolbar } from '../shared/ContentToolbar';
 import { checkAndAwardAchievements } from '../../lib/achievements';
 import { handleInteractionUpdate, handleVoteUpdate } from '../../lib/content';
 // FIX: Replaced incrementVoteCount with incrementNotebookVote for type safety and correctness.
-import { addQuestionNotebook, upsertUserVote, incrementNotebookVote, updateContentComments, updateUser as supabaseUpdateUser, upsertUserQuestionAnswer, clearNotebookAnswers, supabase, getQuestions, getInteractionsData } from '../../services/supabaseClient';
+import { addQuestionNotebook, upsertUserVote, incrementNotebookVote, updateContentComments, updateUser as supabaseUpdateUser, upsertUserQuestionAnswer, clearNotebookAnswers, supabase, getQuestionsByIds } from '../../services/supabaseClient';
 import { NotebookDetailView, NotebookGridView } from './QuestionsViewPart2';
 
 type SortOption = 'temp' | 'time' | 'subject' | 'user' | 'source';
@@ -18,42 +23,13 @@ interface QuestionsViewProps extends MainContentProps {
 }
 
 export const QuestionsView: React.FC<QuestionsViewProps> = ({ allItems, appData, setAppData, currentUser, updateUser, navTarget, clearNavTarget, setScreenContext }) => {
-    const [isLoadingContent, setIsLoadingContent] = useState(false);
-    const [isLoadingInteractions, setIsLoadingInteractions] = useState(false);
     const [selectedNotebook, setSelectedNotebook] = useState<QuestionNotebook | 'all' | null>(null);
     const [commentingOnNotebook, setCommentingOnNotebook] = useState<QuestionNotebook | null>(null);
     const [sort, setSort] = useState<SortOption>('temp');
     const [questionIdToFocus, setQuestionIdToFocus] = useState<string | null>(null);
     const [restoredFromStorage, setRestoredFromStorage] = useState(false);
+    const [isLoadingSpecific, setIsLoadingSpecific] = useState(false);
     
-    useEffect(() => {
-        const areContentLoaded = allItems.length > 0;
-        if (!areContentLoaded && appData.sources.length > 0) {
-            setIsLoadingContent(true);
-            getQuestions().then(allQuestions => {
-                setAppData(prev => {
-                    const sourcesWithContent = prev.sources.map(source => ({
-                        ...source,
-                        questions: allQuestions.filter(q => q.source_id === source.id)
-                    }));
-                    return { ...prev, sources: sourcesWithContent };
-                });
-                setIsLoadingContent(false);
-            });
-        }
-    }, [appData.sources, setAppData, allItems]);
-
-    useEffect(() => {
-        const areInteractionsLoaded = appData.userNotebookInteractions.length > 0;
-        if (!areInteractionsLoaded) {
-            setIsLoadingInteractions(true);
-            getInteractionsData().then(data => {
-                setAppData(prev => ({...prev, ...data}));
-                setIsLoadingInteractions(false);
-            }).catch(() => setIsLoadingInteractions(false));
-        }
-    }, [appData.userNotebookInteractions.length, setAppData]);
-
     // Restore from localStorage on initial mount
     useEffect(() => {
         if (appData.questionNotebooks.length > 0 && !restoredFromStorage && !navTarget) {
@@ -106,6 +82,95 @@ export const QuestionsView: React.FC<QuestionsViewProps> = ({ allItems, appData,
             localStorage.removeItem('procap_lastQuestionId');
         }
     }, [selectedNotebook]);
+
+    // PRIORITY LOADING: If a notebook is selected but its questions are missing (loaded only partially), fetch them!
+    useEffect(() => {
+        if (!selectedNotebook) return;
+
+        // Identify questions needed for this notebook
+        let neededQuestionIds: string[] = [];
+        if (selectedNotebook === 'all') {
+            // For 'all', we rely on background fetch primarily, but can't really fetch *everything* instantly if it's huge.
+            // Usually background fetch covers this. If empty, we wait.
+            return; 
+        } else {
+            neededQuestionIds = (selectedNotebook.question_ids || []).filter((id): id is string => typeof id === 'string');
+        }
+
+        if (neededQuestionIds.length === 0) return;
+
+        // Check which ones are missing or are placeholders (empty text)
+        const existingQuestionsMap = new Map(allItems.map(q => [q.id, q]));
+        const missingIds = neededQuestionIds.filter(id => {
+            const q = existingQuestionsMap.get(id);
+            return !q || !q.questionText; // Missing or placeholder
+        });
+
+        if (missingIds.length > 0) {
+            setIsLoadingSpecific(true);
+            getQuestionsByIds(missingIds).then(fetchedQuestions => {
+                if (fetchedQuestions.length > 0) {
+                    setAppData(prev => {
+                         // We need to merge these questions into the sources structure
+                         // This is tricky because we need to know which source they belong to.
+                         // The fetched questions should have source_id.
+                         const newSources = [...prev.sources];
+                         
+                         fetchedQuestions.forEach(fq => {
+                             const sourceIndex = newSources.findIndex(s => s.id === fq.source_id);
+                             if (sourceIndex > -1) {
+                                 // Update existing source
+                                 const source = newSources[sourceIndex];
+                                 const existingQIndex = (source.questions || []).findIndex(q => q.id === fq.id);
+                                 
+                                 let newQuestions = [...(source.questions || [])];
+                                 if (existingQIndex > -1) {
+                                     newQuestions[existingQIndex] = { ...newQuestions[existingQIndex], ...fq };
+                                 } else {
+                                     newQuestions.push(fq);
+                                 }
+                                 newSources[sourceIndex] = { ...source, questions: newQuestions };
+                             } 
+                             // Note: If source doesn't exist in AppData yet (rare), we can't easily add it without source metadata.
+                             // We assume Stage 2 loaded all source metadata.
+                         });
+                         
+                         return { ...prev, sources: newSources };
+                    });
+                }
+                setIsLoadingSpecific(false);
+            });
+        }
+    }, [selectedNotebook, allItems.length]); // Depend on length to avoid loops, logic handles content check
+
+
+    useEffect(() => {
+        const fetchCurrentUserAnswers = async () => {
+            if (!supabase || !currentUser?.id) return;
+
+            const { data, error } = await supabase
+                .from('user_question_answers')
+                .select('*')
+                .eq('user_id', currentUser.id);
+
+            if (error) {
+                console.error("Failed to fetch current user's answers:", error);
+            } else if (data) {
+                setAppData(prev => {
+                    // Filter out stale answers for the current user and merge fresh data
+                    const otherUsersAnswers = prev.userQuestionAnswers.filter(
+                        a => a.user_id !== currentUser.id
+                    );
+                    return {
+                        ...prev,
+                        userQuestionAnswers: [...otherUsersAnswers, ...data],
+                    };
+                });
+            }
+        };
+
+        fetchCurrentUserAnswers();
+    }, [currentUser.id, setAppData]);
 
     const handleNotebookInteractionUpdate = async (notebookId: string, update: Partial<UserNotebookInteraction>) => {
         let newInteractions = [...appData.userNotebookInteractions];
@@ -198,6 +263,15 @@ export const QuestionsView: React.FC<QuestionsViewProps> = ({ allItems, appData,
 
 
     if (selectedNotebook) {
+        if (isLoadingSpecific) {
+            return (
+                 <div className="flex flex-col items-center justify-center h-64 text-gray-500 gap-2">
+                    <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-light"></div>
+                    <p>Carregando conteúdo do caderno...</p>
+                </div>
+            );
+        }
+
         return <NotebookDetailView 
             notebook={selectedNotebook}
             allQuestions={allItems}
@@ -244,21 +318,19 @@ export const QuestionsView: React.FC<QuestionsViewProps> = ({ allItems, appData,
                 supportedSorts={['temp', 'time', 'user']}
             />
             
-             {isLoadingContent || isLoadingInteractions ? <div className="text-center p-8">Carregando cadernos...</div> : (
-                <div className="space-y-6">
-                    {Array.isArray(processedNotebooks) 
-                        ? renderGrid(processedNotebooks)
-                        : Object.entries(processedNotebooks as Record<string, QuestionNotebook[]>).map(([groupKey, items]: [string, QuestionNotebook[]]) => (
-                            <details key={groupKey} className="bg-card-light dark:bg-card-dark p-4 rounded-lg shadow-sm border border-border-light dark:border-border-dark">
-                                <summary className="text-xl font-bold cursor-pointer">{sort === 'user' ? (appData.users.find(u => u.id === groupKey)?.pseudonym || 'Desconhecido') : groupKey}</summary>
-                                <div className="mt-4 pt-4 border-t border-border-light dark:border-border-dark space-y-4">
-                                {renderGrid(items)}
-                                </div>
-                            </details>
-                        ))
-                    }
-                </div>
-            )}
+            <div className="space-y-6">
+                {Array.isArray(processedNotebooks) 
+                    ? renderGrid(processedNotebooks)
+                    : Object.entries(processedNotebooks as Record<string, QuestionNotebook[]>).map(([groupKey, items]: [string, QuestionNotebook[]]) => (
+                        <details key={groupKey} className="bg-card-light dark:bg-card-dark p-4 rounded-lg shadow-sm border border-border-light dark:border-border-dark">
+                             <summary className="text-xl font-bold cursor-pointer">{sort === 'user' ? (appData.users.find(u => u.id === groupKey)?.pseudonym || 'Desconhecido') : groupKey}</summary>
+                            <div className="mt-4 pt-4 border-t border-border-light dark:border-border-dark space-y-4">
+                               {renderGrid(items)}
+                            </div>
+                        </details>
+                    ))
+                }
+            </div>
         </>
     );
 };

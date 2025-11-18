@@ -1,5 +1,7 @@
 
 
+
+
 import React, { useState, useMemo, useEffect } from 'react';
 import { Theme, View, AppData, User, MainContentProps } from '../types';
 import { VIEWS } from '../constants';
@@ -54,6 +56,7 @@ export const MainContent: React.FC<MainContentProps> = (props) => {
 
 
   const renderContent = () => {
+    // FIX: Pass the full navTarget object if the view name matches to maintain type consistency. The child component can then destructure what it needs.
     const currentNavTarget = (navTarget && navTarget.viewName === activeView.name) ? navTarget : null;
     const clearNavTarget = () => setNavTarget ? setNavTarget(null) : undefined;
 

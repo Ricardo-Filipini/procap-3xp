@@ -10,7 +10,7 @@ import { FontSizeControl, FONT_SIZE_CLASSES } from '../shared/FontSizeControl';
 import { checkAndAwardAchievements } from '../../lib/achievements';
 import { handleInteractionUpdate, handleVoteUpdate } from '../../lib/content';
 import { filterItemsByPrompt, generateNotebookName } from '../../services/geminiService';
-import { addQuestionNotebook, upsertUserVote, updateContentComments, updateUser as supabaseUpdateUser, upsertUserQuestionAnswer, clearNotebookAnswers, supabase, logXpEvent, getNotebookLeaderboard, getQuestionStatsWithDistribution } from '../../services/supabaseClient';
+import { addQuestionNotebook, updateContentComments, updateUser as supabaseUpdateUser, upsertUserQuestionAnswer, clearNotebookAnswers, supabase, logXpEvent, getNotebookLeaderboard, getQuestionStatsWithDistribution } from '../../services/supabaseClient';
 
 const CreateNotebookModal: React.FC<{
     isOpen: boolean;
@@ -47,7 +47,9 @@ const CreateNotebookModal: React.FC<{
                 ? allAvailableSources.filter(s => selectedSourceIds.has(s.id))
                 : allAvailableSources;
             
-            let questionsPool = sourcesToUse.flatMap(s => s.questions);
+            let questionsPool = sourcesToUse.flatMap(s => s.questions || []);
+            // Filter out placeholders if background loading hasn't finished for this source
+            questionsPool = questionsPool.filter(q => q.questionText && q.questionText !== '');
 
             let orderedQuestionsPool: Question[];
 
@@ -82,7 +84,7 @@ const CreateNotebookModal: React.FC<{
             }
             
             if (orderedQuestionsPool.length === 0) {
-                throw new Error("Nenhuma questão disponível com os filtros aplicados.");
+                throw new Error("Nenhuma questão disponível com os filtros aplicados (Verifique se o conteúdo terminou de carregar).");
             }
 
             let finalQuestionIds: string[];
@@ -106,12 +108,13 @@ const CreateNotebookModal: React.FC<{
                 questionIdsToSlice = finalQuestionIds.sort(() => 0.5 - Math.random());
             }
 
-            const sliced = questionIdsToSlice.slice(0, questionCount);
+            // Guard clause against slicing undefined array
+            const sliced = (questionIdsToSlice || []).slice(0, questionCount);
 
             let finalName = name.trim();
             if (!finalName) {
                 setStatusMessage("Gerando nome com IA...");
-                const allQuestions = appData.sources.flatMap(s => s.questions);
+                const allQuestions = appData.sources.flatMap(s => s.questions || []);
                 const selectedQuestions = allQuestions.filter(q => sliced.includes(q.id));
                 finalName = await generateNotebookName(selectedQuestions);
             }
@@ -224,7 +227,7 @@ const QuestionStatsModal: React.FC<{
                 } else {
                     const totalAnswers = data.total_answers || 0;
                     
-                    const distributionArray = question.options.map(option => {
+                    const distributionArray = (question.options || []).map(option => {
                         const count = data.distribution?.[option] || 0;
                         return {
                             option,
@@ -433,9 +436,9 @@ const NotebookStatsModal: React.FC<{
 
     const questionIds = useMemo(() => {
         if (notebook === 'all') {
-            return new Set(appData.sources.flatMap(s => s.questions.map(q => q.id)));
+            return new Set(appData.sources.flatMap(s => (s.questions || []).map(q => q.id)));
         }
-        const ids = Array.isArray(notebook.question_ids) ? notebook.question_ids.filter((id: any): id is string => typeof id === 'string') : [];
+        const ids = Array.isArray(notebook.question_ids) ? notebook.question_ids.filter((id): id is string => typeof id === 'string') : [];
         return new Set(ids);
     }, [notebook, appData.sources]);
 
@@ -555,7 +558,7 @@ export const NotebookGridView: React.FC<{
             .map(i => i.content_id);
     }, [appData.userContentInteractions, currentUser.id]);
     
-    const allQuestions = appData.sources.flatMap(s => s.questions);
+    const allQuestions = appData.sources.flatMap(s => s.questions || []);
 
     const renderNotebook = (notebook: QuestionNotebook | 'all' | 'new' | 'favorites') => {
         if (notebook === 'new') {
@@ -666,6 +669,9 @@ export const NotebookDetailView: React.FC<{
     const [userAnswers, setUserAnswers] = useState<Map<string, UserQuestionAnswer>>(new Map());
     const notebookId = notebook === 'all' ? 'all_questions' : notebook.id;
     
+    // Ref to ensure initial focus is applied only once
+    const hasAppliedInitialFocus = useRef(false);
+
     useEffect(() => {
         const answersForNotebook = appData.userQuestionAnswers.filter(
             ans => ans.user_id === currentUser.id && ans.notebook_id === notebookId
@@ -849,8 +855,9 @@ export const NotebookDetailView: React.FC<{
             } else {
                 setActiveQuestionId(null);
             }
-        } else if (!activeQuestionId && sortedQuestions.length > 0) {
-             setActiveQuestionId(sortedQuestions[0].id);
+        } else if (!activeQuestionId && sortedQuestions.length > 0 && hasAppliedInitialFocus.current) {
+             // Only default to first if we've already handled initial focus attempt
+             // and somehow activeQuestionId became null (e.g. via filter clearing everything then re-adding)
         }
         preservedIndexRef.current = null;
     }, [sortedQuestions]);
@@ -904,6 +911,9 @@ export const NotebookDetailView: React.FC<{
         displayedQuestionRef.current = currentQuestion;
     }
     const questionToRender = isCompleted ? (displayedQuestionRef.current ?? currentQuestion) : currentQuestion;
+    
+    // FIX: Define savedAnswer in component scope so it can be used for effectivelyCompleted calculation
+    const savedAnswer = questionToRender ? userAnswers.get(questionToRender.id) : undefined;
 
     const prevQuestionIdRef = useRef<string | null>(null);
 
@@ -926,7 +936,6 @@ export const NotebookDetailView: React.FC<{
             setXpEarned(null);
         }
 
-        const savedAnswer = userAnswers.get(questionToRender.id);
         if (savedAnswer) {
             const correct = savedAnswer.attempts.includes(questionToRender.correctAnswer);
             setIsCompleted(true);
@@ -944,7 +953,7 @@ export const NotebookDetailView: React.FC<{
         
         prevQuestionIdRef.current = questionToRender.id;
 
-    }, [questionToRender, userAnswers]);
+    }, [questionToRender, userAnswers, savedAnswer]);
     
     const handleShuffleOptions = () => {
         if (!questionToRender) return;
@@ -956,20 +965,36 @@ export const NotebookDetailView: React.FC<{
         setShuffledOptions(options);
     };
 
+    // FIX: Ensure initial focus is applied only once using ref, preventing navigation lock.
     useEffect(() => {
-        if (sortedQuestions.length > 0) {
-            const idToFocus = questionIdToFocus;
-            const indexToFocus = idToFocus ? sortedQuestions.findIndex(q => q.id === idToFocus) : -1;
-            
-            if (indexToFocus !== -1) {
-                setActiveQuestionId(sortedQuestions[indexToFocus].id);
-            } else if (!activeQuestionId || !sortedQuestions.some(q => q.id === activeQuestionId)) {
-                setActiveQuestionId(sortedQuestions[0].id);
-            }
-        } else {
-            setActiveQuestionId(null);
+        if (sortedQuestions.length === 0) {
+            if (activeQuestionId !== null) setActiveQuestionId(null);
+            return;
         }
-    }, [sortedQuestions, questionIdToFocus]);
+
+        let nextActiveId = activeQuestionId;
+
+        // 1. Initial Restore Logic (Run Once)
+        if (questionIdToFocus && !hasAppliedInitialFocus.current) {
+            const targetExists = sortedQuestions.some(q => q.id === questionIdToFocus);
+            if (targetExists) {
+                nextActiveId = questionIdToFocus;
+                hasAppliedInitialFocus.current = true;
+            }
+        }
+
+        // 2. Validation Logic
+        const isValid = nextActiveId && sortedQuestions.some(q => q.id === nextActiveId);
+        if (!isValid) {
+            // Fallback to first
+            nextActiveId = sortedQuestions[0].id;
+        }
+
+        if (nextActiveId !== activeQuestionId) {
+            setActiveQuestionId(nextActiveId);
+        }
+        
+    }, [sortedQuestions, questionIdToFocus, activeQuestionId]);
 
 
     useEffect(() => {
@@ -980,7 +1005,7 @@ export const NotebookDetailView: React.FC<{
     
     useEffect(() => {
         if (setScreenContext && questionToRender) {
-            const context = `Questão: ${questionToRender.questionText}\n\nOpções:\n- ${questionToRender.options.join('\n- ')}`;
+            const context = `Questão: ${questionToRender.questionText}\n\nOpções:\n- ${(questionToRender.options || []).join('\n- ')}`;
             setScreenContext(context);
         }
         return () => { if (setScreenContext) setScreenContext(null); }
@@ -1210,13 +1235,12 @@ export const NotebookDetailView: React.FC<{
         );
     }
     
-    const revealedHints = questionToRender.hints.slice(0, wrongAnswers.size);
+    const revealedHints = (questionToRender.hints || []).slice(0, wrongAnswers.size);
     const showAllHints = isCompleted && selectedOption === questionToRender.correctAnswer;
     const optionsToRender = shuffledOptions || (questionToRender?.options as string[] || []);
     
     // Fix: Ensure stats are only shown if the question is truly completed, avoiding flicker on navigation
     const isNewQuestionRender = questionToRender?.id !== prevQuestionIdRef.current;
-    const savedAnswer = userAnswers.get(questionToRender?.id || '');
     const effectivelyCompleted = !!savedAnswer || (isCompleted && !isNewQuestionRender);
 
     return (
@@ -1227,7 +1251,7 @@ export const NotebookDetailView: React.FC<{
             comments={commentingOnQuestion?.comments || []} 
             onAddComment={(text) => handleCommentAction('add', {text})} 
             onVoteComment={(commentId, voteType) => handleCommentAction('vote', {commentId, voteType})} 
-            contentTitle={commentingOnQuestion?.questionText?.substring(0, 50) + '...' || ''}
+            contentTitle={questionToRender?.questionText ? (questionToRender.questionText.substring(0, 50) + '...') : 'Questão'}
         />
 
         <NotebookStatsModal
@@ -1360,7 +1384,9 @@ export const NotebookDetailView: React.FC<{
                 <div className="bg-primary-light h-2.5 rounded-full" style={{ width: `${sortedQuestions.length > 0 ? (((currentQuestionIndex > -1 ? currentQuestionIndex : 0) + 1) / sortedQuestions.length) * 100 : 0}%` }}></div>
             </div>
 
-            <h2 className={`text-xl font-semibold mb-4 ${FONT_SIZE_CLASSES[fontSize]}`}>{questionToRender?.questionText || 'Carregando enunciado...'}</h2>
+            <h2 className={`text-xl font-semibold mb-4 ${FONT_SIZE_CLASSES[fontSize]}`}>
+                {questionToRender?.questionText ? questionToRender.questionText : 'Carregando enunciado...'}
+            </h2>
 
             <div className={`space-y-3 ${FONT_SIZE_CLASSES[fontSize]}`}>
                 {optionsToRender.map((option: string, index: number) => {
@@ -1469,7 +1495,7 @@ export const NotebookDetailView: React.FC<{
 
                 <div className="relative group">
                     <span className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400">
-                        <LightBulbIcon className="w-5 h-5" /> Dicas ({showAllHints ? questionToRender.hints.length : revealedHints.length}/{questionToRender.hints.length})
+                        <LightBulbIcon className="w-5 h-5" /> Dicas ({showAllHints ? (questionToRender.hints || []).length : revealedHints.length}/{(questionToRender.hints || []).length})
                     </span>
                 </div>
 
@@ -1487,7 +1513,7 @@ export const NotebookDetailView: React.FC<{
             {(revealedHints.length > 0 || showAllHints) && (
                 <div className="mt-4 p-4 rounded-lg bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-300 dark:border-yellow-700">
                     <ul className="list-disc list-inside space-y-1">
-                        {(showAllHints ? questionToRender.hints : revealedHints).map((hint, i) => <li key={i}>{hint}</li>)}
+                        {(showAllHints ? (questionToRender.hints || []) : revealedHints).map((hint, i) => <li key={i}>{hint}</li>)}
                     </ul>
                 </div>
             )}
