@@ -517,39 +517,22 @@ export const NotebookGridView: React.FC<{
     setCommentingOnNotebook: (notebook: QuestionNotebook) => void;
 }> = ({ notebooks, appData, setAppData, currentUser, updateUser, onSelectNotebook, handleNotebookInteractionUpdate, handleNotebookVote, setCommentingOnNotebook }) => {
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-    const [resolvedCounts, setResolvedCounts] = useState<Map<string, number>>(new Map());
+    
+    // Use userQuestionAnswers directly for real-time local updates (fixing the 0 count bug)
+    const resolvedCounts = useMemo(() => {
+        const counts = new Map<string, number>();
+        
+        // Filter answers for current user once
+        const myAnswers = appData.userQuestionAnswers.filter(a => a.user_id === currentUser.id);
+        
+        // Group by notebook_id
+        myAnswers.forEach(ans => {
+            const nbId = ans.notebook_id;
+            counts.set(nbId, (counts.get(nbId) || 0) + 1);
+        });
 
-    useEffect(() => {
-        if (!supabase) return;
-        supabase.rpc('get_user_notebook_progress', { p_user_id: currentUser.id })
-            .then(({ data, error }) => {
-                if (error) {
-                    console.error("Error fetching notebook progress:", error);
-                    return;
-                }
-                if (data) {
-                    const counts = new Map<string, number>();
-                    data.forEach((item: any) => {
-                        if (item.notebook_id) {
-                            counts.set(item.notebook_id, item.answered_count);
-                        }
-                    });
-
-                    // Manually calculate for special notebooks as they don't exist in the RPC result
-                    const answeredInFavorites = appData.userQuestionAnswers
-                        .filter(ans => ans.user_id === currentUser.id && ans.notebook_id === 'favorites_notebook')
-                        .length;
-                    counts.set('favorites_notebook', answeredInFavorites);
-
-                    const answeredInAll = appData.userQuestionAnswers
-                        .filter(ans => ans.user_id === currentUser.id && ans.notebook_id === 'all_questions')
-                        .length;
-                    counts.set('all_questions', answeredInAll);
-                    
-                    setResolvedCounts(counts);
-                }
-            });
-    }, [currentUser.id, appData.userQuestionAnswers]); // Re-run when local answers change to keep special notebooks updated
+        return counts;
+    }, [appData.userQuestionAnswers, currentUser.id]);
 
     const favoritedQuestionIds = useMemo(() => {
         return appData.userContentInteractions

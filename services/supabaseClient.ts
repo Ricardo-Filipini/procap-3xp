@@ -1,4 +1,6 @@
 
+
+
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { AppData, User, Source, ChatMessage, UserMessageVote, UserSourceVote, Summary, Flashcard, Question, Comment, MindMap, ContentType, UserContentInteraction, QuestionNotebook, UserNotebookInteraction, UserQuestionAnswer, AudioSummary, CaseStudy, UserCaseStudyInteraction, ScheduleEvent, StudyPlan, LinkFile, XpEvent, UserMood, ProcapExamQuestion, UserExamAnswer } from '../types';
 
@@ -65,15 +67,14 @@ const fetchTable = async (tableName: string, options?: {
     return allData;
 };
 
-// STAGE 1: Study Core Data (Blocking Load)
-// Fetches Users, Notebooks, Questions, Answers, and Schedule.
-// This ensures the "Questions" view works immediately upon load.
+// STAGE 1: Critical Data Only (Fast Load)
 export const getInitialData = async (userId?: string): Promise<{ data: AppData; error: string | null }> => {
     if (!checkSupabase()) return { data: {} as AppData, error: "Supabase client not configured." };
 
     try {
         const userFilter = userId ? { column: 'user_id', value: userId } : undefined;
 
+        // Fetch only what's needed to render the main UI structure
         const [
             users,
             questionNotebooks,
@@ -82,7 +83,8 @@ export const getInitialData = async (userId?: string): Promise<{ data: AppData; 
             userMoods,
             scheduleEvents,
             sourcesMetadata,
-            allQuestions, // Fetching FULL questions here to ensure notebook functionality
+            // Fetch FULL question info to prevent loading issues when switching between tabs
+            allQuestions, 
             userContentInteractions // Filtered by user
         ] = await Promise.all([
             fetchTable('users'),
@@ -92,11 +94,12 @@ export const getInitialData = async (userId?: string): Promise<{ data: AppData; 
             fetchTable('user_moods'),
             fetchTable('schedule_events', { ordering: { column: 'date', options: { ascending: true } } }),
             fetchTable('sources', { ordering: { column: 'created_at', options: { ascending: false } } }), 
-            fetchTable('questions'), // Heavy but necessary for immediate interactivity
+            fetchTable('questions'), 
             fetchTable('user_content_interactions', { filter: userFilter })
         ]);
         
-        // Construct initial Sources with populated Questions (but empty other content)
+        // Construct initial Sources with empty content arrays (to be filled in background)
+        // But include FULL questions so they are available immediately
         const sourcesWithQuestions = sourcesMetadata.map((source: any) => {
             return {
                 ...source,
@@ -104,7 +107,7 @@ export const getInitialData = async (userId?: string): Promise<{ data: AppData; 
                 flashcards: [],
                 questions: allQuestions.filter((q: any) => q.source_id === source.id).map((q: any) => ({
                     ...q, 
-                    questionText: q.question_text, // Map snake_case DB to camelCase Model
+                    questionText: q.question_text, 
                     correctAnswer: q.correct_answer
                 })),
                 mind_maps: [],
@@ -138,8 +141,7 @@ export const getInitialData = async (userId?: string): Promise<{ data: AppData; 
     }
 };
 
-// STAGE 2: Background Data (Non-Blocking)
-// Fetches Summaries, Flashcards, Chat, and Community History
+// STAGE 2: Heavy Data (Background Load)
 export const getBackgroundData = async (currentUserId?: string): Promise<Partial<AppData>> => {
     if (!checkSupabase()) return {};
 
@@ -150,12 +152,17 @@ export const getBackgroundData = async (currentUserId?: string): Promise<Partial
             studyPlans,
             userMessageVotes,
             userSourceVotes,
+            // Fetch GLOBAL interactions/answers if needed for community stats, 
+            // or just the rest if we only fetched user specific ones before.
+            // For simplicity/performance trade-off, we might skip full global answers download 
+            // and rely on RPCs for global stats, downloading only text content here.
             xp_events,
             caseStudies,
             userCaseStudyInteractions,
-            // Content tables
+            // Content tables - Heavy stuff
             allSummaries,
             allFlashcards,
+            // allQuestionsFull, // Already loaded in InitialData
             allMindMaps,
             allAudioSummaries
         ] = await Promise.all([
@@ -169,6 +176,7 @@ export const getBackgroundData = async (currentUserId?: string): Promise<Partial
             fetchTable('user_case_study_interactions'),
             fetchTable('summaries'),
             fetchTable('flashcards'),
+            // fetchTable('questions'), 
             fetchTable('mind_maps'),
             fetchTable('audio_summaries')
         ]);
@@ -179,6 +187,8 @@ export const getBackgroundData = async (currentUserId?: string): Promise<Partial
             studyPlans,
             userMessageVotes,
             userSourceVotes,
+            // Note: We don't merge user_question_answers here to avoid overwriting current user state 
+            // with a massive list. Global stats should use RPCs.
             xp_events,
             caseStudies,
             userCaseStudyInteractions,
@@ -186,6 +196,7 @@ export const getBackgroundData = async (currentUserId?: string): Promise<Partial
             _rawContent: {
                 summaries: allSummaries,
                 flashcards: allFlashcards,
+                questions: [], // Already populated
                 mind_maps: allMindMaps,
                 audio_summaries: allAudioSummaries
             }
@@ -196,14 +207,7 @@ export const getBackgroundData = async (currentUserId?: string): Promise<Partial
     }
 };
 
-// Deprecated but kept for interface compatibility if needed (returns empty now)
-export const getSecondaryData = async (userId: string): Promise<Partial<AppData>> => {
-    return {};
-}
-
 export const getQuestionsByIds = async (questionIds: string[]): Promise<Question[]> => {
-    // Since questions are now loaded in InitialData, this might be less used,
-    // but useful for specific refetching logic.
     if (!checkSupabase() || questionIds.length === 0) return [];
     
     try {
@@ -235,7 +239,6 @@ export const getQuestionsByIds = async (questionIds: string[]): Promise<Question
         return [];
     }
 }
-
 
 export const getUsers = async (): Promise<{ users: User[]; error: string | null; }> => {
     if (!checkSupabase()) return { users: [], error: "Supabase client not configured." };
