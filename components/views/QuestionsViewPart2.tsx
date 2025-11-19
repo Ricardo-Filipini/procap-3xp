@@ -699,7 +699,7 @@ export const NotebookDetailView: React.FC<{
     const touchStartX = useRef<number | null>(null);
     const touchStartY = useRef<number | null>(null);
     const [shuffledOptions, setShuffledOptions] = useState<string[] | null>(null);
-    const [xpEarned, setXpEarned] = useState<{base: number, bonus: number} | null>(null);
+    const [xpEarned, setXpEarned] = useState<{base: number, bonus: number, streak: number} | null>(null);
     
     const [questionSortOrder, setQuestionSortOrder] = useState<'temp' | 'date' | 'random'>('temp');
     const [shuffleTrigger, setShuffleTrigger] = useState(0);
@@ -1064,9 +1064,11 @@ export const NotebookDetailView: React.FC<{
             const attempts: string[] = [...newWrongAnswers, selectedOption];
             const isCorrectFirstTry = attempts.length === 1 && isCorrect;
             
+            // XP Logic
             const xpMap = [10, 5, 2, 0];
             const baseXpGained = isCorrect ? (xpMap[wrongAnswers.size] || 0) : 0;
             
+            // Global Difficulty Bonus
             let additionalXp = 0;
             if (isCorrectFirstTry) {
                 // Fetch fresh global stats to determine bonus
@@ -1078,7 +1080,6 @@ export const NotebookDetailView: React.FC<{
                      
                      if (allAnswers) {
                          const totalErrors = allAnswers.reduce((acc, ans) => {
-                             // Explicitly count attempts that are NOT correct to accurately gauge difficulty
                              if (!ans.attempts || !Array.isArray(ans.attempts)) return acc;
                              const errorsInSession = ans.attempts.filter((attempt: string) => attempt !== questionToRender.correctAnswer).length;
                              return acc + errorsInSession;
@@ -1087,8 +1088,14 @@ export const NotebookDetailView: React.FC<{
                      }
                 }
             }
+
+            // Streak Bonus Calculation
+            const currentStreak = currentUser.stats.streak || 0;
+            const newStreak = isCorrectFirstTry ? currentStreak + 1 : 0;
+            // Bonus equals the new streak count (e.g., 2nd correct in a row = +2 extra XP)
+            const streakBonus = isCorrectFirstTry ? newStreak : 0;
             
-            const totalXpGained = baseXpGained + additionalXp;
+            const totalXpGained = baseXpGained + additionalXp + streakBonus;
 
             if (totalXpGained > 0) {
                 logXpEvent(currentUser.id, totalXpGained, 'QUESTION_ANSWER', questionToRender.id).then(newEvent => {
@@ -1096,7 +1103,7 @@ export const NotebookDetailView: React.FC<{
                         setAppData(prev => ({...prev, xp_events: [newEvent, ...prev.xp_events]}));
                     }
                 });
-                setXpEarned({ base: baseXpGained, bonus: additionalXp });
+                setXpEarned({ base: baseXpGained, bonus: additionalXp, streak: streakBonus });
             }
 
             const answerPayload: Partial<UserQuestionAnswer> = {
@@ -1111,9 +1118,7 @@ export const NotebookDetailView: React.FC<{
             
             const newStats = { ...currentUser.stats };
             newStats.questionsAnswered = (newStats.questionsAnswered || 0) + 1;
-            
-            const currentStreak = currentUser.stats.streak || 0;
-            newStats.streak = isCorrectFirstTry ? currentStreak + 1 : 0;
+            newStats.streak = newStreak;
 
             if (isCorrectFirstTry) {
                 newStats.correctAnswers = (newStats.correctAnswers || 0) + 1;
@@ -1449,11 +1454,16 @@ export const NotebookDetailView: React.FC<{
                             <div className="flex flex-col items-end">
                                 <div className="flex items-center gap-1 text-sm font-bold text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/50 px-2 py-1 rounded-full">
                                     <SparklesIcon className="w-4 h-4" />
-                                    <span>+{xpEarned.base + xpEarned.bonus} XP</span>
+                                    <span>+{xpEarned.base + xpEarned.bonus + (xpEarned.streak || 0)} XP</span>
                                 </div>
                                 {xpEarned.bonus > 0 && (
                                     <span className="text-xs font-semibold text-yellow-600 dark:text-yellow-400 mt-1">
                                         (+{xpEarned.bonus} bônus por dificuldade)
+                                    </span>
+                                )}
+                                {xpEarned.streak > 0 && (
+                                    <span className="text-xs font-semibold text-orange-500 dark:text-orange-400 mt-1">
+                                        🔥 +{xpEarned.streak} Combo!
                                     </span>
                                 )}
                             </div>

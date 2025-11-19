@@ -203,6 +203,39 @@ export const getBackgroundData = async (currentUserId?: string): Promise<Partial
     }
 };
 
+export const getQuestionsByIds = async (questionIds: string[]): Promise<Question[]> => {
+    if (!checkSupabase() || questionIds.length === 0) return [];
+    
+    try {
+        const batchSize = 100;
+        const batches = [];
+        for (let i = 0; i < questionIds.length; i += batchSize) {
+            batches.push(questionIds.slice(i, i + batchSize));
+        }
+
+        let allQuestions: any[] = [];
+
+        for (const batch of batches) {
+            const { data, error } = await supabase!
+                .from('questions')
+                .select('*')
+                .in('id', batch);
+                
+            if (error) throw error;
+            if (data) allQuestions = [...allQuestions, ...data];
+        }
+        
+        return allQuestions.map((q: any) => ({
+            ...q,
+            questionText: q.question_text,
+            correctAnswer: q.correct_answer,
+        }));
+    } catch (error) {
+        console.error("Error fetching specific questions:", error);
+        return [];
+    }
+}
+
 export const getUsers = async (): Promise<{ users: User[]; error: string | null; }> => {
     if (!checkSupabase()) return { users: [], error: "Supabase client not configured." };
     try {

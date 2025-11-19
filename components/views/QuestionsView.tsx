@@ -3,6 +3,8 @@
 
 
 
+
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { MainContentProps } from '../../types';
 import { Question, Comment, QuestionNotebook, UserNotebookInteraction, UserQuestionAnswer } from '../../types';
@@ -100,7 +102,7 @@ export const QuestionsView: React.FC<QuestionsViewProps> = ({ allItems, appData,
         if (neededQuestionIds.length === 0) return;
 
         // Check which ones are missing or are placeholders (empty text)
-        const existingQuestionsMap = new Map(allItems.map(q => [q.id, q]));
+        const existingQuestionsMap = new Map<string, typeof allItems[0]>(allItems.map(q => [q.id, q]));
         const missingIds = neededQuestionIds.filter(id => {
             const q = existingQuestionsMap.get(id);
             return !q || !q.questionText; // Missing or placeholder
