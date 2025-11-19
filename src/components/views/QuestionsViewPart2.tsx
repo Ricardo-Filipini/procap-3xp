@@ -407,9 +407,9 @@ const NotebookStatsModal: React.FC<{
     appData: MainContentProps['appData'];
     allQuestions: (Question & { source?: any })[];
     currentUser: MainContentProps['currentUser'];
-    onClearAnswers: (questionIdsToClear: string[]) => void;
+    onClearAnswers?: (questionIdsToClear: string[]) => void; // Deprecated/Unused
     onStartClearing: () => void;
-}> = ({ isOpen, onClose, notebook, appData, allQuestions, currentUser, onClearAnswers, onStartClearing }) => {
+}> = ({ isOpen, onClose, notebook, appData, allQuestions, currentUser, onStartClearing }) => {
     const notebookId = notebook === 'all' ? 'all_questions' : notebook.id;
     const notebookName = notebook === 'all' ? "Todas as Questões" : notebook.name;
     
@@ -927,8 +927,10 @@ export const NotebookDetailView: React.FC<{
             setSelectedOption(correct ? questionToRender.correctAnswer : savedAnswer.attempts[savedAnswer.attempts.length - 1]);
             setWrongAnswers(new Set(savedAnswer.attempts.filter(a => a !== questionToRender.correctAnswer)));
         } else {
-            // Only reset these if it's a new question, to avoid clobbering state during an answer attempt.
-            if (isNewQuestion) {
+            // If there is no saved answer, we must ensure the local state is reset.
+            // This covers both "New Question" and "Notebook Cleared while active" scenarios.
+            // If state was "completed" but now there's no answer, it means we cleared it!
+            if (isNewQuestion || isCompleted) {
                 setSelectedOption(null);
                 setWrongAnswers(new Set());
                 setIsCompleted(false);
@@ -1266,25 +1268,6 @@ export const NotebookDetailView: React.FC<{
             allQuestions={allQuestions}
             currentUser={currentUser}
             onStartClearing={() => setIsClearing(true)}
-            onClearAnswers={async (questionIdsToClear) => {
-                const success = await clearNotebookAnswers(currentUser.id, notebookId, questionIdsToClear.length > 0 ? questionIdsToClear : undefined);
-                if (success) {
-                    setAppData(prev => ({
-                        ...prev, 
-                        userQuestionAnswers: prev.userQuestionAnswers.filter(a => {
-                            const isForThisNotebook = a.user_id === currentUser.id && a.notebook_id === notebookId;
-                            if (!isForThisNotebook) return true;
-                            if (questionIdsToClear.length > 0) {
-                                return !questionIdsToClear.includes(a.question_id);
-                            }
-                            return false; 
-                        })
-                    }));
-                    if(sortedQuestions.length > 0) setActiveQuestionId(sortedQuestions[0].id);
-                } else {
-                    alert("Não foi possível limpar as respostas.");
-                }
-            }}
         />
         <ClearAnswersModal
             isOpen={isClearing}
