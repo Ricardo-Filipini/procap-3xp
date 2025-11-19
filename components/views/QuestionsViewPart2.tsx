@@ -12,6 +12,11 @@ import { handleInteractionUpdate, handleVoteUpdate } from '../../lib/content';
 import { filterItemsByPrompt, generateNotebookName } from '../../services/geminiService';
 import { addQuestionNotebook, updateContentComments, updateUser as supabaseUpdateUser, upsertUserQuestionAnswer, clearNotebookAnswers, supabase, logXpEvent, getNotebookLeaderboard, getQuestionStatsWithDistribution } from '../../services/supabaseClient';
 
+// Helper function to remove prefixes like "a)", "A)", "a.", "A." from display text
+const formatOptionDisplay = (text: string) => {
+    return text.replace(/^[a-eA-E][).]\s*/, '');
+};
+
 const CreateNotebookModal: React.FC<{
     isOpen: boolean;
     onClose: () => void;
@@ -278,7 +283,7 @@ const QuestionStatsModal: React.FC<{
                                 {stats.distribution.map(({ option, count, percentage }) => (
                                     <div key={option}>
                                         <div className="flex justify-between items-center text-sm mb-1">
-                                            <span className={`truncate ${option === question.correctAnswer ? 'font-bold' : ''}`} title={option}>{option}</span>
+                                            <span className={`truncate ${option === question.correctAnswer ? 'font-bold' : ''}`} title={option}>{formatOptionDisplay(option)}</span>
                                             <span>{count} ({percentage.toFixed(0)}%)</span>
                                         </div>
                                         <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
@@ -517,22 +522,39 @@ export const NotebookGridView: React.FC<{
     setCommentingOnNotebook: (notebook: QuestionNotebook) => void;
 }> = ({ notebooks, appData, setAppData, currentUser, updateUser, onSelectNotebook, handleNotebookInteractionUpdate, handleNotebookVote, setCommentingOnNotebook }) => {
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-    
-    // Use userQuestionAnswers directly for real-time local updates (fixing the 0 count bug)
-    const resolvedCounts = useMemo(() => {
-        const counts = new Map<string, number>();
-        
-        // Filter answers for current user once
-        const myAnswers = appData.userQuestionAnswers.filter(a => a.user_id === currentUser.id);
-        
-        // Group by notebook_id
-        myAnswers.forEach(ans => {
-            const nbId = ans.notebook_id;
-            counts.set(nbId, (counts.get(nbId) || 0) + 1);
-        });
+    const [resolvedCounts, setResolvedCounts] = useState<Map<string, number>>(new Map());
 
-        return counts;
-    }, [appData.userQuestionAnswers, currentUser.id]);
+    useEffect(() => {
+        if (!supabase) return;
+        supabase.rpc('get_user_notebook_progress', { p_user_id: currentUser.id })
+            .then(({ data, error }) => {
+                if (error) {
+                    console.error("Error fetching notebook progress:", error);
+                    return;
+                }
+                if (data) {
+                    const counts = new Map<string, number>();
+                    data.forEach((item: any) => {
+                        if (item.notebook_id) {
+                            counts.set(item.notebook_id, item.answered_count);
+                        }
+                    });
+
+                    // Manually calculate for special notebooks as they don't exist in the RPC result
+                    const answeredInFavorites = appData.userQuestionAnswers
+                        .filter(ans => ans.user_id === currentUser.id && ans.notebook_id === 'favorites_notebook')
+                        .length;
+                    counts.set('favorites_notebook', answeredInFavorites);
+
+                    const answeredInAll = appData.userQuestionAnswers
+                        .filter(ans => ans.user_id === currentUser.id && ans.notebook_id === 'all_questions')
+                        .length;
+                    counts.set('all_questions', answeredInAll);
+                    
+                    setResolvedCounts(counts);
+                }
+            });
+    }, [currentUser.id, appData.userQuestionAnswers]); // Re-run when local answers change to keep special notebooks updated
 
     const favoritedQuestionIds = useMemo(() => {
         return appData.userContentInteractions
@@ -1446,7 +1468,7 @@ export const NotebookDetailView: React.FC<{
                              <span className="hidden md:flex flex-shrink-0 w-6 h-6 items-center justify-center text-xs font-bold border border-current rounded opacity-50 mt-0.5">
                                 {shortcutKey}
                              </span>
-                             <span className={isStruck ? 'line-through' : ''}>{option}</span>
+                             <span className={isStruck ? 'line-through' : ''}>{formatOptionDisplay(option)}</span>
                         </div>
                     );
                 })}
