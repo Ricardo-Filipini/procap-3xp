@@ -407,7 +407,6 @@ const NotebookStatsModal: React.FC<{
     appData: MainContentProps['appData'];
     allQuestions: (Question & { source?: any })[];
     currentUser: MainContentProps['currentUser'];
-    onClearAnswers?: (questionIdsToClear: string[]) => void; // Deprecated/Unused
     onStartClearing: () => void;
 }> = ({ isOpen, onClose, notebook, appData, allQuestions, currentUser, onStartClearing }) => {
     const notebookId = notebook === 'all' ? 'all_questions' : notebook.id;
@@ -927,9 +926,7 @@ export const NotebookDetailView: React.FC<{
             setSelectedOption(correct ? questionToRender.correctAnswer : savedAnswer.attempts[savedAnswer.attempts.length - 1]);
             setWrongAnswers(new Set(savedAnswer.attempts.filter(a => a !== questionToRender.correctAnswer)));
         } else {
-            // If there is no saved answer, we must ensure the local state is reset.
-            // This covers both "New Question" and "Notebook Cleared while active" scenarios.
-            // If state was "completed" but now there's no answer, it means we cleared it!
+            // Only reset these if it's a new question OR if we are in a completed state but have no saved answer (cleared).
             if (isNewQuestion || isCompleted) {
                 setSelectedOption(null);
                 setWrongAnswers(new Set());
@@ -1232,6 +1229,50 @@ export const NotebookDetailView: React.FC<{
         }
     };
     
+    const revealedHints = (questionToRender?.hints || []).slice(0, wrongAnswers.size);
+    const showAllHints = isCompleted && selectedOption === questionToRender?.correctAnswer;
+    const optionsToRender = shuffledOptions || (questionToRender?.options as string[] || []);
+
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Avoid interfering with inputs (like comments modal)
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+            const key = e.key.toLowerCase();
+
+            if (key === 'n') {
+                handleNextUnanswered();
+                return;
+            }
+
+            if (!isCompleted) {
+                if (key === 'enter' && selectedOption) {
+                    e.preventDefault();
+                    handleConfirmAnswer();
+                    return;
+                }
+
+                const keyMap: {[key: string]: number} = {
+                    '1': 0, 'a': 0,
+                    '2': 1, 'b': 1,
+                    '3': 2, 'c': 2,
+                    '4': 3, 'd': 3,
+                    '5': 4, 'e': 4
+                };
+
+                if (key in keyMap) {
+                    const index = keyMap[key];
+                    if (index < optionsToRender.length) {
+                        handleSelectOption(optionsToRender[index]);
+                    }
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [optionsToRender, isCompleted, selectedOption, handleSelectOption, handleConfirmAnswer, handleNextUnanswered]);
+
     if (!questionToRender) {
         return (
             <div className="bg-card-light dark:bg-card-dark p-6 rounded-lg shadow-md border border-border-light dark:border-border-dark">
@@ -1240,10 +1281,6 @@ export const NotebookDetailView: React.FC<{
             </div>
         );
     }
-    
-    const revealedHints = (questionToRender.hints || []).slice(0, wrongAnswers.size);
-    const showAllHints = isCompleted && selectedOption === questionToRender.correctAnswer;
-    const optionsToRender = shuffledOptions || (questionToRender?.options as string[] || []);
     
     // Fix: Ensure stats are only shown if the question is truly completed, avoiding flicker on navigation
     const isNewQuestionRender = questionToRender?.id !== prevQuestionIdRef.current;
@@ -1379,8 +1416,9 @@ export const NotebookDetailView: React.FC<{
                 {optionsToRender.map((option: string, index: number) => {
                     const isSelected = selectedOption === option;
                     const isWrongAttempt = wrongAnswers.has(option);
-                    const isCorrect = option === questionToRender.correctAnswer;
+                    const isCorrect = option === questionToRender?.correctAnswer;
                     const isStruck = struckOptions.has(option);
+                    const shortcutKey = ['A', 'B', 'C', 'D', 'E'][index];
 
                     let optionClass = "bg-background-light dark:bg-background-dark border-border-light dark:border-border-dark";
                     let cursorClass = "cursor-pointer";
@@ -1421,7 +1459,10 @@ export const NotebookDetailView: React.FC<{
                              onContextMenu={(e) => { e.preventDefault(); toggleStrike(option); }}
                              onTouchStart={(e) => handleTouchStart(option, e)}
                              onTouchEnd={(e) => handleTouchEnd(option, e)}
-                             className={`p-4 border rounded-lg transition-colors ${optionClass} ${cursorClass}`}>
+                             className={`p-4 border rounded-lg transition-colors flex items-start gap-3 ${optionClass} ${cursorClass}`}>
+                             <span className="hidden md:flex flex-shrink-0 w-6 h-6 items-center justify-center text-xs font-bold border border-current rounded opacity-50 mt-0.5">
+                                {shortcutKey}
+                             </span>
                              <span className={isStruck ? 'line-through' : ''}>{option}</span>
                         </div>
                     );
@@ -1431,8 +1472,8 @@ export const NotebookDetailView: React.FC<{
             {isCompleted && (
                 <div className="mt-6 p-4 rounded-lg bg-background-light dark:bg-background-dark border border-border-light dark:border-border-dark">
                     <div className="flex justify-between items-center mb-2">
-                        <h3 className={`text-lg font-bold ${selectedOption === questionToRender.correctAnswer ? 'text-green-600' : 'text-red-600'}`}>
-                            {selectedOption === questionToRender.correctAnswer ? "Resposta Correta!" : "Resposta Incorreta!"}
+                        <h3 className={`text-lg font-bold ${selectedOption === questionToRender?.correctAnswer ? 'text-green-600' : 'text-red-600'}`}>
+                            {selectedOption === questionToRender?.correctAnswer ? "Resposta Correta!" : "Resposta Incorreta!"}
                         </h3>
                          {xpEarned && (
                             <div className="flex flex-col items-end">
@@ -1453,7 +1494,7 @@ export const NotebookDetailView: React.FC<{
                             </div>
                         )}
                     </div>
-                    <p className="mt-2">{questionToRender.explanation}</p>
+                    <p className="mt-2">{questionToRender?.explanation}</p>
                 </div>
             )}
             
@@ -1479,25 +1520,25 @@ export const NotebookDetailView: React.FC<{
                         <button onClick={() => navigateQuestion(1)} disabled={currentQuestionIndex === sortedQuestions.length - 1} className="px-4 py-2 bg-gray-200 dark:bg-gray-700 rounded-md disabled:opacity-50">Próxima</button>
                     </div>
                     <div className="mt-2">
-                        <button onClick={handleNextUnanswered} className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-sm rounded-md hover:bg-gray-300 dark:hover:bg-gray-600">
-                            Próxima não respondida
+                        <button onClick={handleNextUnanswered} title="Atalho: N" className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-sm rounded-md hover:bg-gray-300 dark:hover:bg-gray-600">
+                            Próxima não respondida <span className="hidden md:inline opacity-50 ml-1 text-xs">(N)</span>
                         </button>
                     </div>
                 </div>
 
                 <div className="relative group">
                     <span className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400">
-                        <LightBulbIcon className="w-5 h-5" /> Dicas ({showAllHints ? (questionToRender.hints || []).length : revealedHints.length}/{(questionToRender.hints || []).length})
+                        <LightBulbIcon className="w-5 h-5" /> Dicas ({showAllHints ? (questionToRender?.hints || []).length : revealedHints.length}/{(questionToRender?.hints || []).length})
                     </span>
                 </div>
 
                 {isCompleted ? (
-                    <button onClick={handleNextUnanswered} className="px-6 py-2 bg-primary-light text-white font-bold rounded-md hover:bg-indigo-700">
-                        Próxima Questão
+                    <button onClick={handleNextUnanswered} title="Atalho: N" className="px-6 py-2 bg-primary-light text-white font-bold rounded-md hover:bg-indigo-700">
+                        Próxima Questão <span className="hidden md:inline opacity-50 ml-1 text-xs">(N)</span>
                     </button>
                 ) : (
-                    <button disabled={!selectedOption} onClick={handleConfirmAnswer} className="px-6 py-2 bg-secondary-light text-white font-bold rounded-md hover:bg-emerald-600 disabled:opacity-50">
-                        Confirmar
+                    <button disabled={!selectedOption} onClick={handleConfirmAnswer} title="Atalho: Enter" className="px-6 py-2 bg-secondary-light text-white font-bold rounded-md hover:bg-emerald-600 disabled:opacity-50">
+                        Confirmar <span className="hidden md:inline opacity-50 ml-1 text-xs">(Enter)</span>
                     </button>
                 )}
             </div>
@@ -1505,7 +1546,7 @@ export const NotebookDetailView: React.FC<{
             {(revealedHints.length > 0 || showAllHints) && (
                 <div className="mt-4 p-4 rounded-lg bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-300 dark:border-yellow-700">
                     <ul className="list-disc list-inside space-y-1">
-                        {(showAllHints ? (questionToRender.hints || []) : revealedHints).map((hint, i) => <li key={i}>{hint}</li>)}
+                        {(showAllHints ? (questionToRender?.hints || []) : revealedHints).map((hint, i) => <li key={i}>{hint}</li>)}
                     </ul>
                 </div>
             )}
