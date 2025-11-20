@@ -12,11 +12,6 @@ import { handleInteractionUpdate, handleVoteUpdate } from '../../lib/content';
 import { filterItemsByPrompt, generateNotebookName } from '../../services/geminiService';
 import { addQuestionNotebook, updateContentComments, updateUser as supabaseUpdateUser, upsertUserQuestionAnswer, clearNotebookAnswers, supabase, logXpEvent, getNotebookLeaderboard, getQuestionStatsWithDistribution } from '../../services/supabaseClient';
 
-// Helper function to remove prefixes like "a)", "A)", "a.", "A." from display text
-const formatOptionDisplay = (text: string) => {
-    return text.replace(/^[a-eA-E][).]\s*/, '');
-};
-
 const CreateNotebookModal: React.FC<{
     isOpen: boolean;
     onClose: () => void;
@@ -533,8 +528,10 @@ export const NotebookGridView: React.FC<{
         });
 
         // Calculate for 'all_questions' virtual notebook
-        const uniqueAnsweredIds = new Set(userAnswers.map(a => a.question_id));
-        counts.set('all_questions', uniqueAnsweredIds.size);
+        // FIX: Specifically count answers where notebook_id IS 'all_questions', instead of aggregating unique question IDs from all notebooks.
+        // This ensures the count reflects the specific progress within the "All Questions" context, which allows clearing it independently.
+        const allQuestionsCount = userAnswers.filter(a => a.notebook_id === 'all_questions').length;
+        counts.set('all_questions', allQuestionsCount);
 
         // Calculate for 'favorites' virtual notebook
         const favoritedIds = new Set(appData.userContentInteractions

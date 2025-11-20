@@ -517,39 +517,32 @@ export const NotebookGridView: React.FC<{
     setCommentingOnNotebook: (notebook: QuestionNotebook) => void;
 }> = ({ notebooks, appData, setAppData, currentUser, updateUser, onSelectNotebook, handleNotebookInteractionUpdate, handleNotebookVote, setCommentingOnNotebook }) => {
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-    const [resolvedCounts, setResolvedCounts] = useState<Map<string, number>>(new Map());
 
-    useEffect(() => {
-        if (!supabase) return;
-        supabase.rpc('get_user_notebook_progress', { p_user_id: currentUser.id })
-            .then(({ data, error }) => {
-                if (error) {
-                    console.error("Error fetching notebook progress:", error);
-                    return;
-                }
-                if (data) {
-                    const counts = new Map<string, number>();
-                    data.forEach((item: any) => {
-                        if (item.notebook_id) {
-                            counts.set(item.notebook_id, item.answered_count);
-                        }
-                    });
+    const resolvedCounts = useMemo(() => {
+        const counts = new Map<string, number>();
+        const userAnswers = appData.userQuestionAnswers.filter(a => a.user_id === currentUser.id);
 
-                    // Manually calculate for special notebooks as they don't exist in the RPC result
-                    const answeredInFavorites = appData.userQuestionAnswers
-                        .filter(ans => ans.user_id === currentUser.id && ans.notebook_id === 'favorites_notebook')
-                        .length;
-                    counts.set('favorites_notebook', answeredInFavorites);
+        userAnswers.forEach(ans => {
+             const nbId = ans.notebook_id;
+             counts.set(nbId, (counts.get(nbId) || 0) + 1);
+        });
 
-                    const answeredInAll = appData.userQuestionAnswers
-                        .filter(ans => ans.user_id === currentUser.id && ans.notebook_id === 'all_questions')
-                        .length;
-                    counts.set('all_questions', answeredInAll);
-                    
-                    setResolvedCounts(counts);
-                }
-            });
-    }, [currentUser.id, appData.userQuestionAnswers]); // Re-run when local answers change to keep special notebooks updated
+        // Calculate for 'all_questions' virtual notebook
+        // FIX: Specifically count answers where notebook_id IS 'all_questions', instead of aggregating unique question IDs from all notebooks.
+        // This ensures the count reflects the specific progress within the "All Questions" context, which allows clearing it independently.
+        const allQuestionsCount = userAnswers.filter(a => a.notebook_id === 'all_questions').length;
+        counts.set('all_questions', allQuestionsCount);
+
+        // Calculate for 'favorites' virtual notebook
+        const favoritedIds = new Set(appData.userContentInteractions
+            .filter(i => i.user_id === currentUser.id && i.content_type === 'question' && i.is_favorite)
+            .map(i => i.content_id));
+            
+        const uniqueFavoritesAnswered = new Set(userAnswers.filter(a => favoritedIds.has(a.question_id)).map(a => a.question_id)).size;
+        counts.set('favorites_notebook', uniqueFavoritesAnswered);
+
+        return counts;
+    }, [appData.userQuestionAnswers, appData.userContentInteractions, currentUser.id]);
 
     const favoritedQuestionIds = useMemo(() => {
         return appData.userContentInteractions
@@ -665,8 +658,15 @@ export const NotebookDetailView: React.FC<{
     setScreenContext?: (context: string | null) => void;
 }> = ({ notebook, allQuestions, appData, setAppData, currentUser, updateUser, onBack, questionIdToFocus, setScreenContext }) => {
     
-    const [userAnswers, setUserAnswers] = useState<Map<string, UserQuestionAnswer>>(new Map());
     const notebookId = notebook === 'all' ? 'all_questions' : notebook.id;
+    
+    // Compute user answers synchronously based on appData to ensure instant UI updates
+    const userAnswers = useMemo(() => {
+        const answersForNotebook = appData.userQuestionAnswers.filter(
+            ans => ans.user_id === currentUser.id && ans.notebook_id === notebookId
+        );
+        return new Map(answersForNotebook.map(ans => [ans.question_id, ans]));
+    }, [appData.userQuestionAnswers, currentUser.id, notebookId]);
     
     // Ref to ensure initial focus is applied only once
     const hasAppliedInitialFocus = useRef(false);
@@ -674,14 +674,6 @@ export const NotebookDetailView: React.FC<{
     // NEW: Ref to preserve visual index across sorts
     const preservedIndexRef = useRef<number | null>(null);
 
-    useEffect(() => {
-        const answersForNotebook = appData.userQuestionAnswers.filter(
-            ans => ans.user_id === currentUser.id && ans.notebook_id === notebookId
-        );
-        const answerMap = new Map(answersForNotebook.map(ans => [ans.question_id, ans]));
-        setUserAnswers(answerMap);
-    }, [appData.userQuestionAnswers, currentUser.id, notebookId]);
-    
     const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
     const [selectedOption, setSelectedOption] = useState<string | null>(null);
     const [wrongAnswers, setWrongAnswers] = useState<Set<string>>(new Set());
