@@ -523,8 +523,6 @@ export const NotebookGridView: React.FC<{
 }> = ({ notebooks, appData, setAppData, currentUser, updateUser, onSelectNotebook, handleNotebookInteractionUpdate, handleNotebookVote, setCommentingOnNotebook }) => {
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
-    // Calculate resolved counts directly from local appData (which is the source of truth)
-    // This avoids async RPC delays and sync issues where UI shows 0 but data exists.
     const resolvedCounts = useMemo(() => {
         const counts = new Map<string, number>();
         const userAnswers = appData.userQuestionAnswers.filter(a => a.user_id === currentUser.id);
@@ -666,7 +664,6 @@ export const NotebookDetailView: React.FC<{
     const notebookId = notebook === 'all' ? 'all_questions' : notebook.id;
     
     // Compute user answers synchronously based on appData to ensure instant UI updates
-    // and prevent stale/empty state when entering a notebook.
     const userAnswers = useMemo(() => {
         const answersForNotebook = appData.userQuestionAnswers.filter(
             ans => ans.user_id === currentUser.id && ans.notebook_id === notebookId
