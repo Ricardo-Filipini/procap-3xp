@@ -522,7 +522,9 @@ export const NotebookGridView: React.FC<{
     setCommentingOnNotebook: (notebook: QuestionNotebook) => void;
 }> = ({ notebooks, appData, setAppData, currentUser, updateUser, onSelectNotebook, handleNotebookInteractionUpdate, handleNotebookVote, setCommentingOnNotebook }) => {
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-    
+
+    // Calculate resolved counts directly from local appData (which is the source of truth)
+    // This avoids async RPC delays and sync issues where UI shows 0 but data exists.
     const resolvedCounts = useMemo(() => {
         const counts = new Map<string, number>();
         const userAnswers = appData.userQuestionAnswers.filter(a => a.user_id === currentUser.id);
@@ -532,15 +534,16 @@ export const NotebookGridView: React.FC<{
              counts.set(nbId, (counts.get(nbId) || 0) + 1);
         });
 
+        // Calculate for 'all_questions' virtual notebook
         const uniqueAnsweredIds = new Set(userAnswers.map(a => a.question_id));
         counts.set('all_questions', uniqueAnsweredIds.size);
 
+        // Calculate for 'favorites' virtual notebook
         const favoritedIds = new Set(appData.userContentInteractions
             .filter(i => i.user_id === currentUser.id && i.content_type === 'question' && i.is_favorite)
             .map(i => i.content_id));
             
         const uniqueFavoritesAnswered = new Set(userAnswers.filter(a => favoritedIds.has(a.question_id)).map(a => a.question_id)).size;
-        
         counts.set('favorites_notebook', uniqueFavoritesAnswered);
 
         return counts;
@@ -662,6 +665,8 @@ export const NotebookDetailView: React.FC<{
     
     const notebookId = notebook === 'all' ? 'all_questions' : notebook.id;
     
+    // Compute user answers synchronously based on appData to ensure instant UI updates
+    // and prevent stale/empty state when entering a notebook.
     const userAnswers = useMemo(() => {
         const answersForNotebook = appData.userQuestionAnswers.filter(
             ans => ans.user_id === currentUser.id && ans.notebook_id === notebookId
