@@ -7,6 +7,8 @@
 
 
 
+
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { MainContentProps } from '../../types';
 import { Question, Comment, QuestionNotebook, UserNotebookInteraction, UserQuestionAnswer } from '../../types';
@@ -32,7 +34,6 @@ export const QuestionsView: React.FC<QuestionsViewProps> = ({ allItems, appData,
     const [sort, setSort] = useState<SortOption>('temp');
     const [questionIdToFocus, setQuestionIdToFocus] = useState<string | null>(null);
     const [restoredFromStorage, setRestoredFromStorage] = useState(false);
-    const [isLoadingSpecific, setIsLoadingSpecific] = useState(false);
     
     // Restore from localStorage on initial mount
     useEffect(() => {
@@ -86,66 +87,6 @@ export const QuestionsView: React.FC<QuestionsViewProps> = ({ allItems, appData,
             localStorage.removeItem('procap_lastQuestionId');
         }
     }, [selectedNotebook]);
-
-    // PRIORITY LOADING: If a notebook is selected but its questions are missing (loaded only partially), fetch them!
-    useEffect(() => {
-        if (!selectedNotebook) return;
-
-        // Identify questions needed for this notebook
-        let neededQuestionIds: string[] = [];
-        if (selectedNotebook === 'all') {
-            // For 'all', we rely on background fetch primarily, but can't really fetch *everything* instantly if it's huge.
-            // Usually background fetch covers this. If empty, we wait.
-            return; 
-        } else {
-            neededQuestionIds = (selectedNotebook.question_ids || []).filter((id): id is string => typeof id === 'string');
-        }
-
-        if (neededQuestionIds.length === 0) return;
-
-        // Check which ones are missing or are placeholders (empty text)
-        const existingQuestionsMap = new Map<string, typeof allItems[0]>(allItems.map(q => [q.id, q]));
-        const missingIds = neededQuestionIds.filter(id => {
-            const q = existingQuestionsMap.get(id);
-            return !q || !q.questionText; // Missing or placeholder
-        });
-
-        if (missingIds.length > 0) {
-            setIsLoadingSpecific(true);
-            getQuestionsByIds(missingIds).then(fetchedQuestions => {
-                if (fetchedQuestions.length > 0) {
-                    setAppData(prev => {
-                         // We need to merge these questions into the sources structure
-                         // This is tricky because we need to know which source they belong to.
-                         // The fetched questions should have source_id.
-                         const newSources = [...prev.sources];
-                         
-                         fetchedQuestions.forEach(fq => {
-                             const sourceIndex = newSources.findIndex(s => s.id === fq.source_id);
-                             if (sourceIndex > -1) {
-                                 // Update existing source
-                                 const source = newSources[sourceIndex];
-                                 const existingQIndex = (source.questions || []).findIndex(q => q.id === fq.id);
-                                 
-                                 let newQuestions = [...(source.questions || [])];
-                                 if (existingQIndex > -1) {
-                                     newQuestions[existingQIndex] = { ...newQuestions[existingQIndex], ...fq };
-                                 } else {
-                                     newQuestions.push(fq);
-                                 }
-                                 newSources[sourceIndex] = { ...source, questions: newQuestions };
-                             } 
-                             // Note: If source doesn't exist in AppData yet (rare), we can't easily add it without source metadata.
-                             // We assume Stage 2 loaded all source metadata.
-                         });
-                         
-                         return { ...prev, sources: newSources };
-                    });
-                }
-                setIsLoadingSpecific(false);
-            });
-        }
-    }, [selectedNotebook, allItems.length]); // Depend on length to avoid loops, logic handles content check
 
 
     useEffect(() => {
@@ -262,15 +203,6 @@ export const QuestionsView: React.FC<QuestionsViewProps> = ({ allItems, appData,
 
 
     if (selectedNotebook) {
-        if (isLoadingSpecific) {
-            return (
-                 <div className="flex flex-col items-center justify-center h-64 text-gray-500 gap-2">
-                    <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-light"></div>
-                    <p>Carregando conteúdo do caderno...</p>
-                </div>
-            );
-        }
-
         return <NotebookDetailView 
             notebook={selectedNotebook}
             allQuestions={allItems}

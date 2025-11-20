@@ -3,6 +3,8 @@
 
 
 
+
+
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { AppData, User, Source, ChatMessage, UserMessageVote, UserSourceVote, Summary, Flashcard, Question, Comment, MindMap, ContentType, UserContentInteraction, QuestionNotebook, UserNotebookInteraction, UserQuestionAnswer, AudioSummary, CaseStudy, UserCaseStudyInteraction, ScheduleEvent, StudyPlan, LinkFile, XpEvent, UserMood, ProcapExamQuestion, UserExamAnswer } from '../types';
 
@@ -93,8 +95,8 @@ export const getInitialData = async (userId?: string): Promise<{ data: AppData; 
             userMoods,
             scheduleEvents,
             sourcesMetadata,
-            // We fetch basic question info (ID/Source) to calculate notebook totals, but NOT the text/options yet
-            questionsMetadata,
+            // Full question data fetched here to prevent "Loading..." states
+            questionsFullData,
             userContentInteractions // Filtered by user
         ] = await Promise.all([
             fetchTable('users'),
@@ -104,19 +106,22 @@ export const getInitialData = async (userId?: string): Promise<{ data: AppData; 
             fetchTable('user_moods'),
             fetchTable('schedule_events', { ordering: { column: 'date', options: { ascending: true } } }),
             fetchTable('sources', { ordering: { column: 'created_at', options: { ascending: false } } }), 
-            fetchTable('questions', { select: 'id, source_id', ordering: { column: 'id', options: { ascending: true } } }), // Lightweight fetch for counts
+            fetchTable('questions', { ordering: { column: 'id', options: { ascending: true } } }), // Full fetch
             fetchTable('user_content_interactions', { filter: userFilter, ordering: { column: 'id', options: { ascending: true } } })
         ]);
         
         // Construct initial Sources with empty content arrays (to be filled in background)
-        // But include questions with just IDs so counts work in NotebookView
+        // Questions are populated immediately
         const sourcesWithPlaceholders = sourcesMetadata.map((source: any) => {
             return {
                 ...source,
                 summaries: [],
                 flashcards: [],
-                // Map the lightweight questions so "All Questions" count works immediately
-                questions: questionsMetadata.filter((q: any) => q.source_id === source.id).map((q:any) => ({...q, questionText: '', options: [], correctAnswer: '', explanation: ''})),
+                questions: questionsFullData.filter((q: any) => q.source_id === source.id).map((q:any) => ({
+                    ...q, 
+                    questionText: q.question_text, 
+                    correctAnswer: q.correct_answer
+                })),
                 mind_maps: [],
                 audio_summaries: [],
             };
@@ -159,17 +164,13 @@ export const getBackgroundData = async (currentUserId?: string): Promise<Partial
             studyPlans,
             userMessageVotes,
             userSourceVotes,
-            // Fetch GLOBAL interactions/answers if needed for community stats, 
-            // or just the rest if we only fetched user specific ones before.
-            // For simplicity/performance trade-off, we might skip full global answers download 
-            // and rely on RPCs for global stats, downloading only text content here.
             xp_events,
             caseStudies,
             userCaseStudyInteractions,
             // Content tables - Heavy stuff
             allSummaries,
             allFlashcards,
-            allQuestionsFull,
+            // Questions removed from background load as they are loaded in Stage 1
             allMindMaps,
             allAudioSummaries
         ] = await Promise.all([
@@ -183,7 +184,6 @@ export const getBackgroundData = async (currentUserId?: string): Promise<Partial
             fetchTable('user_case_study_interactions'),
             fetchTable('summaries', { ordering: { column: 'id', options: { ascending: true } } }),
             fetchTable('flashcards', { ordering: { column: 'id', options: { ascending: true } } }),
-            fetchTable('questions', { ordering: { column: 'id', options: { ascending: true } } }), // Now fetching full text
             fetchTable('mind_maps', { ordering: { column: 'id', options: { ascending: true } } }),
             fetchTable('audio_summaries', { ordering: { column: 'id', options: { ascending: true } } })
         ]);
@@ -194,8 +194,6 @@ export const getBackgroundData = async (currentUserId?: string): Promise<Partial
             studyPlans,
             userMessageVotes,
             userSourceVotes,
-            // Note: We don't merge user_question_answers here to avoid overwriting current user state 
-            // with a massive list. Global stats should use RPCs.
             xp_events,
             caseStudies,
             userCaseStudyInteractions,
@@ -203,7 +201,7 @@ export const getBackgroundData = async (currentUserId?: string): Promise<Partial
             _rawContent: {
                 summaries: allSummaries,
                 flashcards: allFlashcards,
-                questions: allQuestionsFull,
+                // questions: [], // Questions preserved from Stage 1
                 mind_maps: allMindMaps,
                 audio_summaries: allAudioSummaries
             }
