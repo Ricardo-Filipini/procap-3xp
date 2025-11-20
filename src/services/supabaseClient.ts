@@ -1,5 +1,8 @@
 
 
+
+
+
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { AppData, User, Source, ChatMessage, UserMessageVote, UserSourceVote, Summary, Flashcard, Question, Comment, MindMap, ContentType, UserContentInteraction, QuestionNotebook, UserNotebookInteraction, UserQuestionAnswer, AudioSummary, CaseStudy, UserCaseStudyInteraction, ScheduleEvent, StudyPlan, LinkFile, XpEvent, UserMood, ProcapExamQuestion, UserExamAnswer } from '../types';
 
@@ -66,6 +69,14 @@ const fetchTable = async (tableName: string, options?: {
     return allData;
 };
 
+export const getAllUserQuestionAnswers = async (userId: string): Promise<UserQuestionAnswer[]> => {
+    if (!checkSupabase()) return [];
+    return fetchTable('user_question_answers', {
+        filter: { column: 'user_id', value: userId },
+        ordering: { column: 'timestamp', options: { ascending: false } }
+    }) as Promise<UserQuestionAnswer[]>;
+};
+
 // STAGE 1: Critical Data Only (Fast Load)
 export const getInitialData = async (userId?: string): Promise<{ data: AppData; error: string | null }> => {
     if (!checkSupabase()) return { data: {} as AppData, error: "Supabase client not configured." };
@@ -88,13 +99,13 @@ export const getInitialData = async (userId?: string): Promise<{ data: AppData; 
         ] = await Promise.all([
             fetchTable('users'),
             fetchTable('question_notebooks', { ordering: { column: 'created_at', options: { ascending: false } } }),
-            fetchTable('user_question_answers', { filter: userFilter }),
-            fetchTable('user_notebook_interactions', { filter: userFilter }),
+            fetchTable('user_question_answers', { filter: userFilter, ordering: { column: 'timestamp', options: { ascending: false } } }),
+            fetchTable('user_notebook_interactions', { filter: userFilter, ordering: { column: 'id', options: { ascending: true } } }),
             fetchTable('user_moods'),
             fetchTable('schedule_events', { ordering: { column: 'date', options: { ascending: true } } }),
             fetchTable('sources', { ordering: { column: 'created_at', options: { ascending: false } } }), 
-            fetchTable('questions', { select: 'id, source_id' }), // Lightweight fetch for counts
-            fetchTable('user_content_interactions', { filter: userFilter })
+            fetchTable('questions', { select: 'id, source_id', ordering: { column: 'id', options: { ascending: true } } }), // Lightweight fetch for counts
+            fetchTable('user_content_interactions', { filter: userFilter, ordering: { column: 'id', options: { ascending: true } } })
         ]);
         
         // Construct initial Sources with empty content arrays (to be filled in background)
@@ -170,11 +181,11 @@ export const getBackgroundData = async (currentUserId?: string): Promise<Partial
             fetchTable('xp_events', { ordering: { column: 'created_at', options: { ascending: false } } }),
             fetchTable('case_studies'),
             fetchTable('user_case_study_interactions'),
-            fetchTable('summaries'),
-            fetchTable('flashcards'),
-            fetchTable('questions'), // Now fetching full text
-            fetchTable('mind_maps'),
-            fetchTable('audio_summaries')
+            fetchTable('summaries', { ordering: { column: 'id', options: { ascending: true } } }),
+            fetchTable('flashcards', { ordering: { column: 'id', options: { ascending: true } } }),
+            fetchTable('questions', { ordering: { column: 'id', options: { ascending: true } } }), // Now fetching full text
+            fetchTable('mind_maps', { ordering: { column: 'id', options: { ascending: true } } }),
+            fetchTable('audio_summaries', { ordering: { column: 'id', options: { ascending: true } } })
         ]);
 
         return {

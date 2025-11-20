@@ -5,6 +5,8 @@
 
 
 
+
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { MainContentProps } from '../../types';
 import { Question, Comment, QuestionNotebook, UserNotebookInteraction, UserQuestionAnswer } from '../../types';
@@ -13,7 +15,7 @@ import { ContentToolbar } from '../shared/ContentToolbar';
 import { checkAndAwardAchievements } from '../../lib/achievements';
 import { handleInteractionUpdate, handleVoteUpdate } from '../../lib/content';
 // FIX: Replaced incrementVoteCount with incrementNotebookVote for type safety and correctness.
-import { addQuestionNotebook, upsertUserVote, incrementNotebookVote, updateContentComments, updateUser as supabaseUpdateUser, upsertUserQuestionAnswer, clearNotebookAnswers, supabase, getQuestionsByIds } from '../../services/supabaseClient';
+import { addQuestionNotebook, upsertUserVote, incrementNotebookVote, updateContentComments, updateUser as supabaseUpdateUser, upsertUserQuestionAnswer, clearNotebookAnswers, supabase, getQuestionsByIds, getAllUserQuestionAnswers } from '../../services/supabaseClient';
 import { NotebookDetailView, NotebookGridView } from './QuestionsViewPart2';
 
 type SortOption = 'temp' | 'time' | 'subject' | 'user' | 'source';
@@ -148,16 +150,11 @@ export const QuestionsView: React.FC<QuestionsViewProps> = ({ allItems, appData,
 
     useEffect(() => {
         const fetchCurrentUserAnswers = async () => {
-            if (!supabase || !currentUser?.id) return;
+            if (!currentUser?.id) return;
 
-            const { data, error } = await supabase
-                .from('user_question_answers')
-                .select('*')
-                .eq('user_id', currentUser.id);
+            const data = await getAllUserQuestionAnswers(currentUser.id);
 
-            if (error) {
-                console.error("Failed to fetch current user's answers:", error);
-            } else if (data) {
+            if (data) {
                 setAppData(prev => {
                     // Filter out stale answers for the current user and merge fresh data
                     const otherUsersAnswers = prev.userQuestionAnswers.filter(
