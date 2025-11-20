@@ -1468,7 +1468,7 @@ export const NotebookDetailView: React.FC<{
                              <span className="hidden md:flex flex-shrink-0 w-6 h-6 items-center justify-center text-xs font-bold border border-current rounded opacity-50 mt-0.5">
                                 {shortcutKey}
                              </span>
-                             <span className={isStruck ? 'line-through' : ''}>{formatOptionDisplay(option)}</span>
+                             <span className={isStruck ? 'line-through' : ''}>{option}</span>
                         </div>
                     );
                 })}
