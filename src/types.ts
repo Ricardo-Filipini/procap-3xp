@@ -305,6 +305,7 @@ export interface ProcapExamQuestion {
   question_text?: string;
   options?: any; // JSONB
   ai_correct_answer: string;
+  ai_justificativa?: string;
   gabarito_preliminar?: string;
   created_at: string;
 }

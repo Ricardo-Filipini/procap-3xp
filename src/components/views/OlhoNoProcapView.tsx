@@ -1,8 +1,9 @@
 
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { MainContentProps, ProcapExamQuestion, UserExamAnswer } from '../../types';
 import { getProcapQuestions, getUserExamAnswers, saveUserExamAnswer, deleteUserExamAnswer, getAllUserExamAnswers } from '../../services/supabaseClient';
-import { XCircleIcon, CheckCircleIcon } from '../Icons';
+import { XCircleIcon, CheckCircleIcon, LightBulbIcon } from '../Icons';
 
 export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) => {
     const [questions, setQuestions] = useState<ProcapExamQuestion[]>([]);
@@ -219,9 +220,36 @@ export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) =>
                             <div className="p-3 border-b border-border-light dark:border-border-dark flex justify-between items-center bg-gray-50 dark:bg-gray-800/50 rounded-t-lg">
                                 <span className="font-bold text-lg">Questão {num}</span>
                                 <div className="flex gap-1 text-xs flex-wrap justify-end">
-                                    {questionData?.ai_correct_answer && <span title="Gabarito IA" className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 font-mono">AI:{questionData.ai_correct_answer.toUpperCase()}</span>}
+                                    {questionData?.ai_correct_answer && (
+                                        <div className="relative group">
+                                            <span 
+                                                title={questionData.ai_justificativa ? "Ver justificativa da IA" : "Gabarito IA"} 
+                                                className={`px-1.5 py-0.5 rounded font-mono cursor-help flex items-center gap-1
+                                                    ${questionData.ai_justificativa ? 'bg-blue-600 text-white shadow-sm ring-1 ring-blue-400' : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'}
+                                                `}
+                                            >
+                                                AI:{questionData.ai_correct_answer.toUpperCase()}
+                                                {questionData.ai_justificativa && <span className="text-[10px] opacity-80">ℹ️</span>}
+                                            </span>
+                                            {questionData.ai_justificativa && (
+                                                <div className="absolute bottom-full right-0 mb-2 w-64 p-3 bg-gray-800 text-white text-xs rounded shadow-lg opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50 leading-relaxed border border-gray-600">
+                                                    <div className="font-bold mb-1 text-blue-300">Justificativa IA:</div>
+                                                    {questionData.ai_justificativa}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                     {questionData?.gabarito_preliminar && <span title="Gabarito Preliminar" className="px-1.5 py-0.5 rounded bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 font-mono">OF:{questionData.gabarito_preliminar.toUpperCase()}</span>}
-                                    {majority && majority.count > 1 && <span title="Maioria" className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 font-mono">{majority.percentage.toFixed(0)}%{majority.answer.toUpperCase()}</span>}
+                                    {majority && majority.count > 1 && (
+                                        <div className="relative group">
+                                            <span title="Maioria" className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 font-mono cursor-help">
+                                                {majority.percentage.toFixed(0)}%{majority.answer.toUpperCase()}
+                                            </span>
+                                            <div className="absolute bottom-full right-0 mb-2 w-max p-2 bg-gray-800 text-white text-xs rounded shadow-lg opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50 border border-gray-600">
+                                                {majority.count} votos de {majority.total}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                             
