@@ -1,9 +1,10 @@
 
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { MainContentProps, ProcapExamQuestion, UserExamAnswer } from '../../types';
 import { getProcapQuestions, getUserExamAnswers, saveUserExamAnswer, deleteUserExamAnswer, getAllUserExamAnswers } from '../../services/supabaseClient';
 import { XCircleIcon, CheckCircleIcon, LightBulbIcon } from '../Icons';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts';
+import { FontSizeControl, FONT_SIZE_CLASSES_LARGE } from '../shared/FontSizeControl';
 
 export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) => {
     const [questions, setQuestions] = useState<ProcapExamQuestion[]>([]);
@@ -11,6 +12,10 @@ export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) =>
     const [allAnswers, setAllAnswers] = useState<UserExamAnswer[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [expandedQuestion, setExpandedQuestion] = useState<number | null>(null);
+    
+    // New States
+    const [comparisonMode, setComparisonMode] = useState<'official' | 'ai' | 'majority'>('official');
+    const [fontSize, setFontSize] = useState(1); // Default slightly larger (Index 1 in LARGE array)
 
     useEffect(() => {
         let isMounted = true;
@@ -134,6 +139,54 @@ export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) =>
         };
     }, [userAnswers, questions, allAnswers]);
 
+    // Histogram Data Logic
+    const histogramData = useMemo(() => {
+        if (allAnswers.length === 0 || questions.length === 0) return { data: [], currentUserScore: 0 };
+
+        // 1. Build the "Correct Key" based on comparison mode
+        const correctKey: Record<number, string> = {};
+        questions.forEach(q => {
+            let answer = '';
+            if (comparisonMode === 'official') answer = q.gabarito_preliminar || '';
+            else if (comparisonMode === 'ai') answer = q.ai_correct_answer || '';
+            else if (comparisonMode === 'majority') answer = calculateMajority(q.question_number)?.answer || '';
+            
+            if (answer) correctKey[q.question_number] = answer.toLowerCase();
+        });
+
+        // 2. Calculate score for each user
+        const userScores: Record<string, number> = {};
+        allAnswers.forEach(ans => {
+            if (!userScores[ans.user_id]) userScores[ans.user_id] = 0;
+            
+            const correctAnswer = correctKey[ans.question_number];
+            if (correctAnswer && ans.selected_answer === correctAnswer) {
+                userScores[ans.user_id]++;
+            }
+        });
+
+        // Ensure current user is in the map (even if score is 0)
+        const myScore = userScores[currentUser.id] || 0;
+
+        // 3. Aggregate scores into distribution
+        const scoreCounts: Record<number, number> = {};
+        // Initialize likely range (0-40)
+        for(let i=0; i<=40; i++) scoreCounts[i] = 0;
+
+        Object.values(userScores).forEach(score => {
+            scoreCounts[score] = (scoreCounts[score] || 0) + 1;
+        });
+
+        const data = Object.entries(scoreCounts).map(([score, count]) => ({
+            score: Number(score),
+            count
+        })).filter(d => d.score > 0 && d.count > 0).sort((a,b) => a.score - b.score);
+
+        return { data, currentUserScore: myScore };
+
+    }, [allAnswers, questions, comparisonMode, currentUser.id]);
+
+
     const divergences = useMemo(() => {
         return questions.filter(q => {
             const ai = q.ai_correct_answer?.toLowerCase();
@@ -148,6 +201,13 @@ export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) =>
         });
     }, [questions, allAnswers]);
 
+    const renderQuestionText = (text: string) => {
+        // Replace literal "\n" or actual newlines with rendered breaks
+        return text.split(/\\n|\n/).map((line, index) => (
+            <p key={index} className={`mb-2 ${FONT_SIZE_CLASSES_LARGE[fontSize]}`}>{line}</p>
+        ));
+    };
+
     if (isLoading) {
         return (
             <div className="flex flex-col items-center justify-center h-64 text-gray-500 gap-2">
@@ -157,8 +217,74 @@ export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) =>
         );
     }
 
+    const modeLabels = {
+        official: 'Gabarito Preliminar',
+        ai: 'Inteligência Artificial',
+        majority: 'Maioria da Comunidade'
+    };
+
     return (
         <div className="space-y-6 pb-20 animate-fade-in-up">
+            
+            {/* Header controls */}
+            <div className="flex justify-end">
+                <FontSizeControl fontSize={fontSize} setFontSize={setFontSize} maxSize={4} />
+            </div>
+
+            {/* Distribution Histogram */}
+            <div className="bg-card-light dark:bg-card-dark p-6 rounded-lg border border-border-light dark:border-border-dark shadow-sm">
+                <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
+                    <h3 className="text-lg font-bold">Distribuição de Notas (Acertos / 40)</h3>
+                    <div className="flex bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
+                        {(['official', 'ai', 'majority'] as const).map((mode) => (
+                            <button
+                                key={mode}
+                                onClick={() => setComparisonMode(mode)}
+                                className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all ${
+                                    comparisonMode === mode
+                                        ? 'bg-white dark:bg-gray-700 text-primary-light dark:text-primary-dark shadow-sm'
+                                        : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                                }`}
+                            >
+                                {modeLabels[mode]}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                
+                <div className="h-64 w-full">
+                    {histogramData.data.length > 0 ? (
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={histogramData.data} margin={{top: 20, right: 30, left: 0, bottom: 5}}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                <XAxis dataKey="score" />
+                                <YAxis allowDecimals={false} />
+                                <Tooltip 
+                                    cursor={{fill: 'rgba(200,200,200,0.1)'}}
+                                    contentStyle={{ backgroundColor: 'var(--card-bg)', borderColor: 'var(--border-color)', borderRadius: '8px' }}
+                                />
+                                <Bar dataKey="count" name="Usuários" radius={[4, 4, 0, 0]}>
+                                    {histogramData.data.map((entry, index) => (
+                                        <Cell 
+                                            key={`cell-${index}`} 
+                                            fill={entry.score === histogramData.currentUserScore ? '#10b981' : '#6366f1'} 
+                                        />
+                                    ))}
+                                </Bar>
+                                <ReferenceLine x={histogramData.currentUserScore} stroke="#10b981" label={{ value: 'Você', position: 'top', fill:'#10b981', fontSize: 12, fontWeight: 'bold' }} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    ) : (
+                        <div className="h-full flex items-center justify-center text-gray-400">
+                            Dados insuficientes para o gráfico
+                        </div>
+                    )}
+                </div>
+                <p className="text-center text-xs text-gray-500 mt-2">
+                    Baseado em {comparisonMode === 'official' ? 'Gabarito Preliminar' : comparisonMode === 'ai' ? 'Correção da IA' : 'Maioria dos Votos'}
+                </p>
+            </div>
+
             {/* Stats Dashboard */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="bg-card-light dark:bg-card-dark p-4 rounded-lg border border-border-light dark:border-border-dark shadow-sm flex flex-col items-center justify-center">
@@ -256,11 +382,11 @@ export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) =>
                             <div className="p-4 flex-grow flex flex-col justify-between gap-4">
                                 {questionData?.question_text ? (
                                     <div onClick={() => setExpandedQuestion(expandedQuestion === num ? null : num)} className="cursor-pointer group">
-                                        <p className={`text-sm text-foreground-light dark:text-foreground-dark transition-all ${expandedQuestion === num ? '' : 'line-clamp-4 group-hover:text-primary-light dark:group-hover:text-primary-dark'}`}>
-                                            {questionData.question_text}
-                                        </p>
+                                        <div className={`text-sm text-foreground-light dark:text-foreground-dark transition-all ${expandedQuestion === num ? '' : 'line-clamp-4 group-hover:text-primary-light dark:group-hover:text-primary-dark'}`}>
+                                            {renderQuestionText(questionData.question_text)}
+                                        </div>
                                         {optionsMap && expandedQuestion === num && (
-                                            <div className="mt-3 text-xs space-y-2 text-gray-600 dark:text-gray-300 border-t pt-2 border-gray-200 dark:border-gray-700 animate-fade-in-up">
+                                            <div className={`mt-3 text-xs space-y-2 text-gray-600 dark:text-gray-300 border-t pt-2 border-gray-200 dark:border-gray-700 animate-fade-in-up ${FONT_SIZE_CLASSES_LARGE[fontSize]}`}>
                                                 {Object.entries(optionsMap).map(([key, val]: [string, any]) => (
                                                     <div key={key} className={`p-1 rounded ${userAnswer === key ? 'bg-primary-light/10 text-primary-light font-bold' : ''}`}>
                                                         <span className="uppercase font-bold mr-1">{key})</span> {val}
