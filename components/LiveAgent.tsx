@@ -110,30 +110,33 @@ export const LiveAgent: React.FC<LiveAgentProps> = ({ appData, currentUser, setA
     - **PASSO 1: ACHAR O ID.** Use a função \`findContent\` ou \`querySupabase\` para encontrar o ID exato do item que o usuário pediu.
     - **PASSO 2: NAVEGAR.** Use a função \`navigateTo\` com o ID que você encontrou no passo 1.
     - **Exceção:** Se o usuário pedir para ir a uma tela genérica (ex: "ir para Resumos"), você pode usar \`navigateTo\` diretamente, sem um ID.
-3.  **USE O CONTEXTO DA TELA:** A seção "CONTEXTO DA TELA ATUAL" abaixo contém o texto que o usuário está vendo. Use essa informação para responder perguntas como "leia isso para mim" ou "me ajude com esta questão". Combine este contexto com seu conhecimento e, se necessário, com informações do Supabase para dar respostas completas.
-4.  **SEJA PROATIVO:** Não espere apenas por comandos. Sugira atividades. Se o usuário parece preso, ofereça uma dica ou sugira abrir um resumo relacionado. Ex: "Notei que você errou algumas questões sobre política monetária. Que tal abrirmos um resumo sobre o COPOM para revisar?"
+3.  **ACESSO À PROVA (OLHO NO PROCAP):** Você tem acesso total aos dados da prova.
+    - Use \`querySupabase('procap_exam_questions')\` para ver o enunciado, opções, \`gabarito_preliminar\` (oficial) e \`ai_correct_answer\` (sugestão da IA).
+    - Use \`querySupabase('user_exam_answers')\` para ver o que a comunidade está respondendo.
+    - Ao comentar sobre divergências, compare o gabarito oficial com o da IA e a maioria das respostas dos usuários. Identifique questões polêmicas onde a maioria discorda do gabarito.
+4.  **USE O CONTEXTO DA TELA:** A seção "CONTEXTO DA TELA ATUAL" abaixo contém o texto que o usuário está vendo. Use essa informação para responder perguntas como "leia isso para mim" ou "me ajude com esta questão". Combine este contexto com seu conhecimento e, se necessário, com informações do Supabase para dar respostas completas.
+5.  **SEJA PROATIVO:** Não espere apenas por comandos. Sugira atividades. Se o usuário parece preso, ofereça uma dica ou sugira abrir um resumo relacionado.
 
 **FERRAMENTAS DISPONÍVEIS (FUNÇÕES):**
 
 *   \`navigateTo(viewName, id, subId, term)\`:
     *   Uso: Mudar a tela do usuário.
-    *   \`viewName\`: Para qual tela ir (ex: "Questões", "Resumos", "Flashcards").
-    *   \`id\`: (Opcional) ID de um item principal para abrir (ex: ID de um caderno).
-    *   \`subId\`: (Opcional) ID de um sub-item para focar (ex: ID de uma questão específica dentro do caderno).
-    *   \`term\`: (Opcional) Termo para filtrar a tela (ex: nome de uma fonte em "Flashcards").
+    *   \`viewName\`: Para qual tela ir (ex: "Questões", "Resumos", "Flashcards", "Olho no Procap").
+    *   \`id\`: (Opcional) ID de um item principal para abrir.
+    *   \`subId\`: (Opcional) ID de um sub-item para focar.
+    *   \`term\`: (Opcional) Termo para filtrar a tela.
 
 *   \`findContent(viewName, searchTerm)\`:
-    *   Uso: Encontrar o ID de um item quando você só sabe o nome. **ESSENCIAL antes de usar \`navigateTo\` com um ID.**
-    *   Exemplo: O usuário diz "abrir o caderno de estudos do BCB". Você chama \`findContent(viewName: "Questões", searchTerm: "estudos do BCB")\` para obter o ID, e SÓ ENTÃO chama \`navigateTo(viewName: "Questões", id: "ID_RETORNADO")\`.
+    *   Uso: Encontrar o ID de um item quando você só sabe o nome.
+    *   Exemplo: O usuário diz "abrir o caderno de estudos do BCB". Você chama \`findContent(viewName: "Questões", searchTerm: "estudos do BCB")\`.
 
 *   \`querySupabase(tableName)\`:
-    *   Uso: Obter uma lista de todos os itens disponíveis em uma categoria. Útil para responder "quais cadernos existem?".
-    *   \`tableName\`: Tabelas permitidas: 'question_notebooks', 'sources'.
-    *   Exemplo: O usuário pergunta "quais cadernos de questões temos?". Você chama \`querySupabase(tableName: 'question_notebooks')\` e lista os resultados para ele.
+    *   Uso: Consultar o banco de dados para obter listas de itens ou dados da prova.
+    *   \`tableName\`: Tabelas permitidas: 'question_notebooks', 'sources', 'procap_exam_questions', 'user_exam_answers'.
+    *   Exemplo: "Quais questões tem mais divergência?". Você busca as tabelas de prova e respostas e calcula/analisa.
 
 *   \`adjustPlaybackSpeed(speed)\`:
-    *   Uso: Ajustar a velocidade da minha fala.
-    *   \`speed\`: A nova velocidade. Valores permitidos: 0.85 (lento), 1.0 (normal), 1.15 (rápido).
+    *   Uso: Ajustar a velocidade da minha fala (0.85, 1.0, 1.15).
 
 **INFORMAÇÕES DISPONÍVEIS:**
 
@@ -176,11 +179,11 @@ ${screenContext || "Nenhum conteúdo específico na tela. O usuário está prova
                 },
                 {
                     name: 'querySupabase',
-                    description: 'Consulta uma tabela do banco de dados para obter uma lista de itens. Útil para descobrir o que está disponível. Use para listar cadernos, fontes, etc.',
+                    description: 'Consulta uma tabela do banco de dados para obter uma lista de itens ou dados da prova. Tabelas permitidas: "question_notebooks", "sources", "procap_exam_questions", "user_exam_answers".',
                     parameters: {
                         type: Type.OBJECT,
                         properties: {
-                            tableName: { type: Type.STRING, description: 'O nome da tabela a ser consultada (permitido: "question_notebooks", "sources").' },
+                            tableName: { type: Type.STRING, description: 'O nome da tabela a ser consultada.' },
                         },
                         required: ['tableName']
                     }
@@ -271,7 +274,7 @@ ${screenContext || "Nenhum conteúdo específico na tela. O usuário está prova
                                         }
                                     } else if (fc.name === 'querySupabase') {
                                         const { tableName } = args;
-                                        const allowedTables = ['question_notebooks', 'sources'];
+                                        const allowedTables = ['question_notebooks', 'sources', 'procap_exam_questions', 'user_exam_answers'];
                                         if (allowedTables.includes(tableName) && supabase) {
                                             const { data, error } = await supabase.from(tableName).select('*');
                                             if (error) {

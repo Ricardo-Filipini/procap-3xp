@@ -154,27 +154,38 @@ export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) =>
             if (answer) correctKey[q.question_number] = answer.toLowerCase();
         });
 
-        // 2. Calculate score for each user
+        // 2. Calculate score for each user AND track total answers count
         const userScores: Record<string, number> = {};
+        const userAnswerCounts: Record<string, number> = {};
+
         allAnswers.forEach(ans => {
+            // Initialize
             if (!userScores[ans.user_id]) userScores[ans.user_id] = 0;
+            if (!userAnswerCounts[ans.user_id]) userAnswerCounts[ans.user_id] = 0;
             
+            // Count answers
+            userAnswerCounts[ans.user_id]++;
+
+            // Calculate Score
             const correctAnswer = correctKey[ans.question_number];
             if (correctAnswer && ans.selected_answer === correctAnswer) {
                 userScores[ans.user_id]++;
             }
         });
 
-        // Ensure current user is in the map (even if score is 0)
+        // Ensure current user is in the map (even if score is 0) for the reference line
         const myScore = userScores[currentUser.id] || 0;
 
-        // 3. Aggregate scores into distribution
+        // 3. Aggregate scores into distribution, filtering by answer count > 20
         const scoreCounts: Record<number, number> = {};
         // Initialize likely range (0-40)
         for(let i=0; i<=40; i++) scoreCounts[i] = 0;
 
-        Object.values(userScores).forEach(score => {
-            scoreCounts[score] = (scoreCounts[score] || 0) + 1;
+        Object.entries(userScores).forEach(([userId, score]) => {
+            // FILTER: Only include users with MORE THAN 20 answers
+            if (userAnswerCounts[userId] > 20) {
+                scoreCounts[score] = (scoreCounts[score] || 0) + 1;
+            }
         });
 
         const data = Object.entries(scoreCounts).map(([score, count]) => ({
@@ -276,11 +287,12 @@ export const OlhoNoProcapView: React.FC<MainContentProps> = ({ currentUser }) =>
                         </ResponsiveContainer>
                     ) : (
                         <div className="h-full flex items-center justify-center text-gray-400">
-                            Dados insuficientes para o gráfico
+                            Dados insuficientes para o gráfico (Mínimo 20 respostas)
                         </div>
                     )}
                 </div>
                 <p className="text-center text-xs text-gray-500 mt-2">
+                    *Considerando apenas usuários com mais de 20 questões respondidas.<br/>
                     Baseado em {comparisonMode === 'official' ? 'Gabarito Preliminar' : comparisonMode === 'ai' ? 'Correção da IA' : 'Maioria dos Votos'}
                 </p>
             </div>
